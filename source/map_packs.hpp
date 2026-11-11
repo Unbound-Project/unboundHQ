@@ -34,6 +34,15 @@ inline std::vector<std::string> packFields(const std::string& text) {
     while(std::getline(in,part,'|'))out.push_back(part);
     return out;
 }
+// New packs are selected by default. An explicit saved opt-out always wins.
+inline bool mapPackSelected(const std::string& preferences,const std::string& id) {
+    bool selected=true;std::istringstream lines(preferences);std::string line;
+    while(std::getline(lines,line)){
+        const auto fields=packFields(trim(line));
+        if(fields.size()==2&&fields[0]==id&&(fields[1]=="0"||fields[1]=="1"))selected=fields[1]=="1";
+    }
+    return selected;
+}
 inline bool packId(const std::string& s) {
     return !s.empty()&&s.size()<=64&&std::all_of(s.begin(),s.end(),[](unsigned char c){return (c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='-';});
 }

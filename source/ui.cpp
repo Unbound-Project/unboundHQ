@@ -3,30 +3,43 @@
 #include "input.hpp"
 #include "plugin_policy.hpp"
 #include "install_feedback.hpp"
+#include "supply_run_art.hpp"
 #include <SDL2/SDL_image.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <sstream>
+#include <iomanip>
+
 
 namespace unbound {
 namespace {
 constexpr int W=1280,H=720;
 constexpr SDL_Color White{255,255,255,255},Ink{25,30,34,255},Muted{151,161,167,255};
 constexpr SDL_Color Blue{0,159,207,255},Pale{238,244,247,255};
-SDL_Color accentColor(){return config::ghostsMode()?SDL_Color{167,190,203,255}:SDL_Color{255,92,0,255};}
-SDL_Color darkColor(){return config::ghostsMode()?SDL_Color{16,22,28,255}:SDL_Color{10,12,14,255};}
-SDL_Color panelColor(){return config::ghostsMode()?SDL_Color{25,33,42,248}:SDL_Color{18,21,23,248};}
-SDL_Color raisedColor(){return config::ghostsMode()?SDL_Color{33,44,53,255}:SDL_Color{27,31,34,255};}
-constexpr SDL_Color Green{46,174,119,255},Red{218,67,72,255};
+SDL_Color accentColor(){return config::ghostsMode()?SDL_Color{224,225,220,255}:SDL_Color{255,104,12,255};}
+SDL_Color darkColor(){return SDL_Color{12,15,17,255};}
+SDL_Color panelColor(){return SDL_Color{19,23,26,255};}
+SDL_Color raisedColor(){return SDL_Color{29,34,37,255};}
+constexpr SDL_Color Green{62,193,113,255},Red{218,67,72,255};
 constexpr SDL_Color Steam{12,15,17,255},SteamCard{27,31,34,255};
 constexpr SDL_Color PanelBorder{77,84,89,255};
 constexpr SDL_Color LightText{205,211,215,255};
 constexpr int NewsClipTop=102,NewsClipBottom=658;
 // Retain the originally centered clip; the optional left/right clips are no
 // longer loaded or drawn. Keeping the generated index preserves its timing.
-constexpr std::size_t DownloadClip=1;
+std::string displayLanguage(std::string language){
+    if(!language.empty())language[0]=static_cast<char>(std::toupper(static_cast<unsigned char>(language[0])));
+    return language;
+}
+std::string displayPackageSize(std::uint64_t bytes){
+    std::ostringstream value;
+    const bool gib=bytes>=1024ULL*1024*1024;
+    value<<std::fixed<<std::setprecision(gib?2:1)
+         <<double(bytes)/(gib?1073741824.0:1048576.0)<<(gib?" GiB":" MiB");
+    return value.str();
+}
 bool newsVisible(int y,int height){return y<NewsClipBottom&&y+height>NewsClipTop;}
 const std::vector<std::vector<std::string>> KeyboardRows={
     {"Q","W","E","R","T","Y","U","I","O","P"},
@@ -173,15 +186,15 @@ bool Ui::initialize(std::string& error){
     // Audio is optional and memory-backed. It keeps playing during network and
     // install workers without any music-file reads or UI-frame polling.
     backgroundMusic_.start("fs:/vol/content/audio/hq_theme.wav");
-    loadDownloadAnimations();
+    loadWaitingGame();
     return true;
 }
 void Ui::shutdown(){
     networkGlobe_.clear();
     backgroundMusic_.stop();
     downloadAnimationActive_=false;
-    for(auto& texture:downloadAtlases_){if(texture)SDL_DestroyTexture(texture);texture=nullptr;}
-    downloadClipsReady_.fill(false);
+    if(waitingAtlas_)SDL_DestroyTexture(waitingAtlas_);
+    waitingAtlas_=nullptr;
     if(downloadScreenCache_)SDL_DestroyTexture(downloadScreenCache_);
     downloadScreenCache_=nullptr;
     newsHero_=nullptr;
@@ -247,7 +260,7 @@ void Ui::present(){
     if(textMeasureCache_.size()>256)textMeasureCache_.clear();
 }
 void Ui::beginTouch(const std::string& identity){
-    if(identity!="loading-cancel")downloadAnimationActive_=false;
+    if(identity!="loading-cancel"&&identity!="loading-safe")downloadAnimationActive_=false;
     pendingTouchIdentity_=identity;pendingTouchTargets_.clear();suppressedTouchButtons_=0;
 }
 void Ui::touchTarget(SDL_Rect rect,TouchActionKind kind,int value,const SDL_Rect* clip){
@@ -465,69 +478,98 @@ void Ui::directionIcon(SDL_Rect rect,std::uint32_t direction,SDL_Color color){
     SDL_Texture* icon=navigationIcons_[index];SDL_SetTextureColorMod(icon,color.r,color.g,color.b);
     SDL_RenderCopy(renderer_,icon,nullptr,&rect);
 }
-void Ui::navigationRail(int activeSection){
-    SDL_SetRenderDrawColor(renderer_,10,12,14,255);
-    SDL_Rect rail{0,102,NavigationRailWidth,556};SDL_RenderFillRect(renderer_,&rail);
-    SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,NavigationRailWidth,102,NavigationRailWidth,658);
-    text(regular18_,"UNBOUND HQ",24,125,Muted,178);
+void Ui::checkmark(SDL_Rect rect,SDL_Color color){
+    SDL_SetRenderDrawColor(renderer_,color.r,color.g,color.b,color.a);
+    const int x=rect.x,y=rect.y;
+    for(int stroke=0;stroke<2;++stroke){
+        SDL_RenderDrawLine(renderer_,x+2,y+rect.h/2+stroke,x+rect.w/3,y+rect.h-3+stroke);
+        SDL_RenderDrawLine(renderer_,x+rect.w/3,y+rect.h-3+stroke,x+rect.w-2,y+3+stroke);
+    }
+}
+void Ui::primaryAction(SDL_Rect rect,const std::string& label,bool focused,bool enabled){
+    if(focused)roundRect({rect.x-3,rect.y-3,rect.w+6,rect.h+6},10,White);
+    roundRect(rect,7,enabled?accentColor():raisedColor());
+    const auto foreground=enabled?(config::ghostsMode()?Ink:White):Muted;
+    const int labelWidth=std::min(measure(bold20_,label).first,rect.w-68);
+    const int groupWidth=labelWidth+40;
+    const int x=rect.x+(rect.w-groupWidth)/2;
+    circle(x+14,rect.y+rect.h/2,14,foreground);
+    text(bold20_,"A",x+14,rect.y+(rect.h-28)/2,enabled?accentColor():raisedColor(),0,true);
+    text(bold20_,label,x+40,rect.y+(rect.h-28)/2,foreground,rect.w-66);
+}
+void Ui::artworkCover(SDL_Texture* texture,SDL_Rect rect){
+    int width=0,height=0;
+    if(!texture||SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)!=0||width<=0||height<=0)return;
+    const double scale=std::max(double(rect.w)/width,double(rect.h)/height);
+    const int cropWidth=std::min(width,int(std::ceil(rect.w/scale)));
+    const int cropHeight=std::min(height,int(std::ceil(rect.h/scale)));
+    const SDL_Rect source{(width-cropWidth)/2,(height-cropHeight)/6,cropWidth,cropHeight};
+    SDL_RenderCopy(renderer_,texture,&source,&rect);
+}
+void Ui::navigationRail(int activeSection,bool interactive){
+    const SDL_Rect rail{0,102,NavigationRailWidth,556};
+    SDL_SetRenderDrawColor(renderer_,darkColor().r,darkColor().g,darkColor().b,255);
+    SDL_RenderFillRect(renderer_,&rail);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,NavigationRailWidth,102,NavigationRailWidth,658);
     const std::array<std::string,6> labels{{"HQ","Install / Update","Workshop","Mod Manager","Support","Network"}};
     const int chosen=navigationFocused_?navigationSelected_:activeSection;
     for(int i=0;i<6;++i){
-        const int y=160+i*62;const bool selected=chosen==i;
-        touchTarget({14,y,198,48},TouchActionKind::Sidebar,i);
+        const int y=142+i*66;
+        const bool selected=chosen==i;
+        const SDL_Rect row{14,y,198,52};
+        if(interactive)touchTarget(row,TouchActionKind::Sidebar,i);
         if(selected){
-            if(navigationFocused_)quietPanel({14,y,198,48},true);
-            else roundRect({14,y,198,48},6,raisedColor());
+            roundRect(row,7,raisedColor());
+            roundRect({row.x,row.y,4,row.h},2,accentColor());
+            if(navigationFocused_){
+                SDL_SetRenderDrawColor(renderer_,accentColor().r,accentColor().g,accentColor().b,255);
+                SDL_RenderDrawRect(renderer_,&row);
+            }
         }
-        const SDL_Color color=selected&&navigationFocused_?accentColor():(selected?LightText:Muted);
-        text(regular18_,labels[i],61,y+10,color,142);
-        SDL_Texture* icon=navigationIcons_[static_cast<std::size_t>(i==5?10:i)];
+        const SDL_Color color=selected?White:Muted;
+        text(regular18_,labels[i],61,y+13,color,144);
+        auto* icon=navigationIcons_[static_cast<std::size_t>(i==5?10:i)];
         SDL_SetTextureColorMod(icon,color.r,color.g,color.b);
-        const SDL_Rect iconRect{25,y+10,28,28};
+        const SDL_Rect iconRect{25,y+12,28,28};
         SDL_RenderCopy(renderer_,icon,nullptr,&iconRect);
     }
-    SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,24,560,202,560);
-    text(regular18_,navigationFocused_?"Choose a section":gameName(config::activeGame),24,578,Muted,180);
-    text(regular18_,navigationFocused_?"A opens section":"Unbound HQ",24,604,Muted,180);
 }
-void Ui::header(const std::string& section,bool gameSwitchEnabled,int gameChoice){
-    SDL_Rect black{0,0,W,102};SDL_SetRenderDrawColor(renderer_,darkColor().r,darkColor().g,darkColor().b,255);SDL_RenderFillRect(renderer_,&black);
-    SDL_Rect orange{0,100,W,2};SDL_SetRenderDrawColor(renderer_,accentColor().r,accentColor().g,accentColor().b,255);SDL_RenderFillRect(renderer_,&orange);
+void Ui::header(const std::string&,bool gameSwitchEnabled,int gameChoice){
+    const SDL_Rect bar{0,0,W,102};
+    SDL_SetRenderDrawColor(renderer_,darkColor().r,darkColor().g,darkColor().b,255);
+    SDL_RenderFillRect(renderer_,&bar);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,NavigationRailWidth,0,NavigationRailWidth,102);
+    SDL_SetRenderDrawColor(renderer_,accentColor().r,accentColor().g,accentColor().b,255);
+    SDL_RenderDrawLine(renderer_,NavigationRailWidth,100,W,100);
     int logoWidth=0,logoHeight=0;
     if(SDL_QueryTexture(logo_,nullptr,nullptr,&logoWidth,&logoHeight)==0&&logoWidth>0&&logoHeight>0){
-        const float scale=std::min(190.0f/logoWidth,78.0f/logoHeight);
-        const SDL_FRect mark{(NavigationRailWidth-logoWidth*scale)/2, (102-logoHeight*scale)/2,
+        const float scale=std::min(190.0f/logoWidth,98.0f/logoHeight);
+        const SDL_FRect mark{(NavigationRailWidth-logoWidth*scale)/2,(102-logoHeight*scale)/2,
                              logoWidth*scale,logoHeight*scale};
         SDL_RenderCopyF(renderer_,logo_,nullptr,&mark);
     }
-    const std::string build=std::string(config::AppVersion)+" • r"+
-        std::to_string(config::AppReleaseRevision);
-    const int buildX=W-28-measure(regular18_,build).first;
-    text(regular18_,build,buildX,39,accentColor());
-    SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,NavigationRailWidth,18,NavigationRailWidth,84);
-    text(regular22_,section,ContentLeft,36,LightText,260);
-    const SDL_Rect control{582,28,346,46};
-    text(regular18_,"GAME",control.x-65,37,Muted);
+    const std::string build=std::string(config::AppVersion)+" · r"+std::to_string(config::AppReleaseRevision);
+    text(regular18_,build,W-28-measure(regular18_,build).first,39,Muted);
+
+    const SDL_Rect control{ContentLeft,24,424,54};
     roundRect(control,8,PanelBorder);
     roundRect({control.x+1,control.y+1,control.w-2,control.h-2},7,darkColor());
     const int segmentWidth=control.w/2;
     const int active=config::ghostsMode()?1:0;
     const char* labels[]={"Black Ops II","Ghosts"};
-    const SDL_Color activeFill=config::ghostsMode()?SDL_Color{52,73,86,255}:SDL_Color{56,33,20,255};
+    const SDL_Color activeFill=config::ghostsMode()?SDL_Color{55,58,59,255}:SDL_Color{58,36,23,255};
     for(int i=0;i<2;++i){
         const SDL_Rect segment{control.x+i*segmentWidth,control.y,segmentWidth,control.h};
         if(i==active){
             roundRect({segment.x+3,segment.y+3,segment.w-6,segment.h-6},6,activeFill);
-            const auto color=accentColor();
-            SDL_SetRenderDrawColor(renderer_,color.r,color.g,color.b,color.a);
-            const int x=segment.x+16,y=segment.y+23;
-            SDL_RenderDrawLine(renderer_,x,y,x+5,y+5);
-            SDL_RenderDrawLine(renderer_,x+5,y+5,x+13,y-4);
+            checkmark({segment.x+20,segment.y+18,17,17},accentColor());
         }
-        text(bold20_,labels[i],segment.x+segment.w/2+(i==active?9:0),segment.y+9,
-             i==active?accentColor():LightText,segment.w-30,true);
+        text(bold20_,labels[i],segment.x+segment.w/2+(i==active?10:0),segment.y+12,
+             i==active?accentColor():LightText,segment.w-48,true);
         if(i==gameChoice){
-            SDL_SetRenderDrawColor(renderer_,Pale.r,Pale.g,Pale.b,Pale.a);
+            SDL_SetRenderDrawColor(renderer_,White.r,White.g,White.b,255);
             const SDL_Rect focus{segment.x+2,segment.y+2,segment.w-4,segment.h-4};
             SDL_RenderDrawRect(renderer_,&focus);
         }
@@ -571,15 +613,18 @@ void Ui::footer(const std::vector<std::pair<std::string,std::string>>& actions,b
         }else{
             if(subdued){roundRect(badge,7,PanelBorder);roundRect({badge.x+1,badge.y+1,badge.w-2,badge.h-2},6,raisedColor());}
             else roundRect(badge,10,accentColor());
-            text(bold20_,action.first,badge.x+badge.w/2,badge.y+3,White,0,true);
+            text(bold20_,action.first,badge.x+badge.w/2,badge.y+3,!subdued&&config::ghostsMode()?Ink:White,0,true);
             std::uint32_t bits=0;
-            if(action.first=="A")bits=button::A;
+            if(action.first=="A"||action.first=="A/UP")bits=button::A;
             else if(action.first=="B")bits=button::B;
             else if(action.first=="X/1"||action.first=="X")bits=button::X;
             else if(action.first=="Y/2"||action.first=="Y")bits=button::Y;
             else if(action.first=="+")bits=button::Plus;
             else if(action.first=="-")bits=button::Minus;
             else if(action.first=="L")bits=button::L;
+            else if(action.first=="UP")bits=button::Up;
+            else if(action.first=="DOWN")bits=button::Down;
+            else if(action.first=="RIGHT")bits=button::Right;
             if(bits&&!(suppressedTouchButtons_&bits))
                 touchTarget({static_cast<int>(i)*columnWidth+8,663,columnWidth-16,52},
                             TouchActionKind::Button,static_cast<int>(bits));
@@ -588,118 +633,229 @@ void Ui::footer(const std::vector<std::pair<std::string,std::string>>& actions,b
     }
 }
 void Ui::bootScreen(){pump();beginTouch("boot");SDL_RenderCopy(renderer_,boot_,nullptr,nullptr);SDL_Rect shade{0,640,W,80};SDL_SetRenderDrawColor(renderer_,0,0,0,175);SDL_RenderFillRect(renderer_,&shade);text(regular22_,"Loading Unbound HQ...",W/2,663,White,0,true);present();}
-void Ui::loadDownloadAnimations(){
-    // Decode only the retained center clip once. Its small sheet plus the
-    // 720p redraw cache use under 4 MiB instead of loading all three clips.
-    // Missing assets or unsupported render targets never prevent HQ starting.
+void Ui::loadWaitingGame(){
     if(!SDL_RenderTargetSupported(renderer_))return;
     downloadScreenCache_=SDL_CreateTexture(renderer_,SDL_PIXELFORMAT_RGBA8888,
                                            SDL_TEXTUREACCESS_TARGET,W,H);
     if(!downloadScreenCache_)return;
     SDL_SetTextureBlendMode(downloadScreenCache_,SDL_BLENDMODE_NONE);
-    for(std::size_t i=0;i<downloadAtlases_.size();++i){
-        const auto& selected=download_animation::assets::Clips[DownloadClip];
-        bool needed=false;
-        for(std::size_t frame=0;frame<selected.count;++frame)
-            needed=needed||selected.frames[frame].atlas==i;
-        if(!needed)continue;
-        const auto& asset=download_animation::assets::Atlases[i];
-        SDL_Texture* texture=IMG_LoadTexture(renderer_,asset.path);
-        int width=0,height=0;
-        if(texture&&(SDL_QueryTexture(texture,nullptr,nullptr,&width,&height)!=0||
-                     width!=asset.width||height!=asset.height)){
-            SDL_DestroyTexture(texture);texture=nullptr;
+    SDL_Surface* atlas=SDL_CreateRGBSurfaceWithFormat(0,512,80,32,SDL_PIXELFORMAT_RGBA32);
+    if(!atlas)return;
+    SDL_FillRect(atlas,nullptr,SDL_MapRGBA(atlas->format,0,0,0,0));
+    const auto color=[](char pixel){
+        switch(pixel){
+            case 'k':return SDL_Color{7,10,12,255};
+            case 'd':return SDL_Color{40,45,48,255};
+            case 'g':return SDL_Color{78,84,87,255};
+            case 'l':return SDL_Color{153,157,155,255};
+            case 'w':return SDL_Color{236,232,217,255};
+            case 's':return SDL_Color{224,171,116,255};
+            case 'v':return SDL_Color{120,116,68,255};
+            case 'r':return SDL_Color{211,46,48,255};
+            case 'b':return SDL_Color{148,100,60,255};
+            case 'n':return SDL_Color{53,65,81,255};
+            default:return SDL_Color{242,138,32,255};
         }
-        if(texture)SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
-        downloadAtlases_[i]=texture;
+    };
+    const auto paint=[&](const auto& rows,int x,int y){
+        for(std::size_t row=0;row<rows.size();++row)
+            for(std::size_t col=0;col<std::min<std::size_t>(32,rows[row].size());++col){
+                const char pixel=rows[row][col];
+                if(pixel=='.')continue;
+                const auto shade=color(pixel);
+                const SDL_Rect dot{x+int(col),y+int(row),1,1};
+                SDL_FillRect(atlas,&dot,SDL_MapRGBA(atlas->format,shade.r,shade.g,shade.b,255));
+            }
+    };
+    for(int frame=0;frame<3;++frame)paint(supply_art::Soldier,frame*32,0);
+    paint(supply_art::LegsA,0,24);paint(supply_art::LegsB,32,24);paint(supply_art::JumpLegs,64,24);
+    paint(supply_art::Toaster,96,0);paint(supply_art::Cone,128,0);
+    paint(supply_art::Pizza,160,0);paint(supply_art::Seagull,192,0);
+    paint(supply_art::LowBatteryGamePad,224,0);paint(supply_art::MysteryTeddy,256,0);
+    paint(supply_art::Juggernog,288,0);
+    paint(supply_art::MobPlane,320,0);paint(supply_art::Brutus,352,0);
+    paint(supply_art::DuckSoldier,384,0);paint(supply_art::SeagullFlap,416,0);
+    // Cache the score digits once: no per-frame font rasterization or uploads.
+    for(int digit=0;digit<10;++digit){
+        const char label[]{char('0'+digit),0};
+        SDL_Surface* glyph=TTF_RenderUTF8_Blended(bold20_,label,White);
+        if(glyph){
+            SDL_Rect target{digit*18+(18-glyph->w)/2,42,glyph->w,glyph->h};
+            SDL_BlitSurface(glyph,nullptr,atlas,&target);
+            SDL_FreeSurface(glyph);
+        }
     }
-    for(std::size_t i=0;i<downloadClipsReady_.size();++i){
-        if(i!=DownloadClip){downloadClipsReady_[i]=false;continue;}
-        const auto& clip=download_animation::assets::Clips[i];
-        bool ready=clip.count>0&&clip.durationMs>0;
-        for(std::size_t f=0;ready&&f<clip.count;++f)
-            ready=clip.frames[f].atlas<downloadAtlases_.size()&&downloadAtlases_[clip.frames[f].atlas];
-        downloadClipsReady_[i]=ready;
+    waitingAtlas_=SDL_CreateTextureFromSurface(renderer_,atlas);
+    SDL_FreeSurface(atlas);
+    if(waitingAtlas_){
+        SDL_SetTextureBlendMode(waitingAtlas_,SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(waitingAtlas_,SDL_ScaleModeNearest);
     }
 }
-void Ui::drawDownloadAnimations(std::uint32_t now){
-    if(!downloadClipsReady_[DownloadClip])return;
-    const auto& clip=download_animation::assets::Clips[DownloadClip];
-    const auto& frame=clip.frames[download_animation::frameIndex(clip,now,downloadAnimationStarted_)];
-    const SDL_Rect source{frame.x,frame.y,frame.width,frame.height};
-    const SDL_Rect target{(W-frame.width)/2,downloadAnimationTop_+(128-frame.height)/2,
-                          frame.width,frame.height};
-    SDL_RenderCopy(renderer_,downloadAtlases_[frame.atlas],&source,&target);
+void Ui::waitingGameInput(std::uint32_t buttons,std::uint32_t held,TouchSample touch){
+    if(!downloadAnimationActive_)return;
+    const bool touchDuck=touch.valid&&touch.touching&&waitingDuckTouch_.contains(touch.x,touch.y);
+    supplyRun_.setDucking(((buttons|held)&button::Down)||touchDuck);
+    if(buttons&(button::A|button::Up))supplyRun_.queueJump();
+}
+void Ui::drawWaitingGame(std::uint32_t now){
+    if(!waitingAtlas_)return;
+    supplyRun_.update(now);
+    const SDL_Rect arena{64,336,1152,224};
+    SDL_RenderSetClipRect(renderer_,&arena);
+    const int ground=548;
+    // A few rectangles provide parallax scenery without textures or file I/O.
+    SDL_SetRenderDrawColor(renderer_,25,30,33,255);
+    for(int i=0;i<10;++i){
+        const int x=64+(i*157-int(supplyRun_.distance()/7)%157);
+        const int height=28+(i%4)*17;
+        const SDL_Rect building{x,ground-height,110,height};
+        SDL_RenderFillRect(renderer_,&building);
+    }
+    SDL_SetRenderDrawColor(renderer_,123,128,127,255);
+    SDL_RenderDrawLine(renderer_,64,ground,1216,ground);
+    for(int i=0;i<25;++i){
+        const int x=64+(i*49-int(supplyRun_.distance())%49);
+        const SDL_Rect pebble{x,ground+5+(i%2)*3,4,3};
+        SDL_RenderFillRect(renderer_,&pebble);
+    }
+    const auto sprite=[&](int index,int x,int bottom,int width,int height){
+        const SDL_Rect source{index*32,0,32,36};
+        const SDL_Rect target{x,bottom-height,width,height};
+        SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
+    };
+    const int frame=supplyRun_.height()>0?2:(now/120)%2;
+    if(supplyRun_.ducking()){
+        const SDL_Rect source{384,0,32,18};
+        const SDL_Rect target{64+int(SupplyRun::PlayerX)-14,ground-36,64,36};
+        SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
+    }else sprite(frame,64+int(SupplyRun::PlayerX)-14,ground-int(supplyRun_.height()),64,72);
+    for(const auto& obstacle:supplyRun_.obstacles()){
+        const auto& definition=SupplyRun::Obstacles[obstacle.kind];
+        const int bottom=ground-int(SupplyRun::obstacleLift(obstacle))+(obstacle.kind==3?int((now/160)%2)*3:0);
+        const SDL_Rect source{obstacle.kind==3&&(now/160)%2?416:96+int(obstacle.kind)*32,0,32,definition.spriteHeight};
+        const int height=source.h*2;
+        const SDL_Rect target{64+int(obstacle.x),bottom-height,64,height};
+        SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
+    }
+    const SupplyRun::Obstacle* next=nullptr;
+    for(const auto& obstacle:supplyRun_.obstacles()){
+        if(obstacle.x+SupplyRun::Obstacles[obstacle.kind].width<SupplyRun::PlayerX)continue;
+        if(!next||obstacle.x<next->x)next=&obstacle;
+    }
+    if(next)text(regular18_,"INCOMING: "+std::string(SupplyRun::Obstacles[next->kind].joke)+(SupplyRun::overhead(next->kind)?"  [DUCK]":"  [JUMP]"),W/2,365,Muted,1040,true);
+    SDL_RenderSetClipRect(renderer_,nullptr);
+    const auto digits=[&](unsigned value,int right,SDL_Color color){
+        SDL_SetTextureColorMod(waitingAtlas_,color.r,color.g,color.b);
+        for(int place=0;place<6;++place){
+            const SDL_Rect source{int(value%10)*18,42,18,28};
+            const SDL_Rect target{right-18*(place+1),300,18,28};
+            SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
+            value/=10;
+        }
+        SDL_SetTextureColorMod(waitingAtlas_,255,255,255);
+    };
+    digits(supplyRun_.score(),988,accentColor());
+    digits(supplyRun_.best(),1216,LightText);
+    if(supplyRun_.crashed()){
+        roundRect({420,383,490,108},8,{16,20,23,240});
+        text(bold28_,"Run over. One more?",665,394,White,460,true);
+        text(regular18_,"Press A or tap to restart",665,446,LightText,460,true);
+    }
 }
 void Ui::animateDownloadWaiting(){
-    if(!downloadAnimationActive_||!downloadScreenCache_||touchIdentity_!="loading-cancel")return;
+    if(!downloadAnimationActive_||!downloadScreenCache_||
+       (touchIdentity_!="loading-cancel"&&touchIdentity_!="loading-safe"))return;
     const auto now=SDL_GetTicks();
-    if(!download_animation::redrawDue(now,downloadAnimationLastDraw_))return;
+    if(now-downloadAnimationLastDraw_<33)return;
+    renderWaitingGameFrame(now);
+}
+void Ui::renderWaitingGameFrame(std::uint32_t now){
+    if(!downloadAnimationActive_||!downloadScreenCache_)return;
     downloadAnimationLastDraw_=now;
     pump();
-    // Publish the same already-reserved touch map. Animation frames must not
-    // cancel a held press on the download's Cancel control.
     pendingTouchIdentity_=touchIdentity_;pendingTouchTargets_=touchTargets_;
     SDL_RenderCopy(renderer_,downloadScreenCache_,nullptr,nullptr);
-    drawDownloadAnimations(now);
+    drawWaitingGame(now);
     present();
 }
-void Ui::loading(const std::string& rawTitle,const std::string& rawDetail,int progress,bool cancellable,const char* cancelLabel){
+void Ui::loading(const std::string& title,const std::string& detail,int progress,bool cancellable,const char* cancelLabel){
+    drawLoading(title,detail,progress,cancellable,cancelLabel,false);
+}
+void Ui::downloadLoading(const std::string& title,const std::string& detail,int progress,bool cancellable,const char* cancelLabel){
+    drawLoading(title,detail,progress,cancellable,cancelLabel,true);
+}
+void Ui::installLoading(const std::string& title,const std::string& detail,int progress){
+    drawLoading(title,detail,progress,false,"",true);
+}
+void Ui::drawLoading(const std::string& rawTitle,const std::string& rawDetail,int progress,bool cancellable,const char* cancelLabel,bool miniGame){
     const auto friendly=installProgressFeedback(rawTitle,rawDetail);
-    const auto& title=friendly.title;
-    const auto& detail=friendly.message;
-    pump();beginTouch(cancellable?"loading-cancel":"loading-safe");
-    constexpr int contentX=274,contentWidth=922;
-    const auto firstBreak=detail.find('\n');
-    const std::string lead=detail.substr(0,firstBreak);
-    const std::string notes=firstBreak==std::string::npos?std::string{}:detail.substr(firstBreak+1);
-    const CachedText* titleText=wrappedText(bold28_,title,contentWidth,White);
-    const int titleHeight=titleText?titleText->height:TTF_FontHeight(bold28_);
-    const CachedText* leadText=lead.empty()?nullptr:wrappedText(bold20_,lead,contentWidth,LightText);
-    const CachedText* noteText=notes.empty()?nullptr:wrappedText(regular18_,notes,contentWidth,Muted);
-    const int leadHeight=leadText?leadText->height:0;
-    const int noteHeight=noteText?noteText->height:0;
-    const int detailHeight=leadHeight+(!lead.empty()&&!notes.empty()?8:0)+noteHeight;
-    // One measured column keeps the full version, bytes, ETA and real stage
-    // visible. The lead line is easier to scan; subordinate details stay quiet.
-    const int cardHeight=std::clamp(30+titleHeight+22+detailHeight+30+8+22+26+30,274,490);
-    const bool assetsReady=std::any_of(downloadClipsReady_.begin(),downloadClipsReady_.end(),[](bool ready){return ready;});
-    const auto arrangement=download_animation::layout(cardHeight,assetsReady&&downloadScreenCache_&&
-                                                       download_animation::eligible(title,cancellable));
-    const bool animated=arrangement.visible&&SDL_SetRenderTarget(renderer_,downloadScreenCache_)==0;
-    const int top=animated?arrangement.cardTop:102+(556-cardHeight)/2;
-    const bool downloading=download_animation::eligible(title,cancellable)||
-                           title.find("download")!=std::string::npos;
-    const bool verifying=title.find("Verif")!=std::string::npos||title.find("verif")!=std::string::npos||
-                         title.find("Checking saved package")!=std::string::npos;
-    const bool installing=title.find("npack")!=std::string::npos||title.find("nstall")!=std::string::npos||
-                          title.find("destination")!=std::string::npos||title.starts_with("Checking Unbound");
-    backdrop();header(downloading?"Download":(verifying?"Package verification":
-                      (installing?"Install / Update":"Unbound HQ")));
-    quietPanel({36,top,1208,cardHeight});
-    SDL_Rect art{88,top+(cardHeight-144)/2,144,144};SDL_RenderCopy(renderer_,squareLogo_,nullptr,&art);
-    wrapped(bold28_,title,{contentX,top+30,contentWidth,titleHeight},White);
-    const int detailTop=top+30+titleHeight+22;
-    const int progressY=top+cardHeight-82;
-    const int detailBottom=progressY-24;
-    if(leadText)wrapped(bold20_,lead,{contentX,detailTop,contentWidth,std::max(0,std::min(leadHeight,detailBottom-detailTop))},LightText);
-    const int notesTop=detailTop+leadHeight+(!lead.empty()&&!notes.empty()?8:0);
-    if(noteText)wrapped(regular18_,notes,{contentX,notesTop,contentWidth,std::max(0,detailBottom-notesTop)},Muted);
-    SDL_Rect track{contentX,progressY,contentWidth,8};roundRect(track,4,{43,49,53,255});
-    const int shown=progress<0?0:std::clamp(progress,0,100);
-    if(shown>0){SDL_Rect active{contentX,progressY,std::max(8,contentWidth*shown/100),8};roundRect(active,4,accentColor());}
-    text(regular18_,progress<0?"Working...":std::to_string(shown)+"% complete",contentX,progressY+24,Muted);
-    if(cancellable)footer({{"B",cancelLabel}});
-    else {footer({});text(regular18_,"Operation in progress. Keep the console on.",W/2,679,Muted,1160,true);}
+    const bool game=miniGame&&waitingAtlas_&&downloadScreenCache_;
     const auto now=SDL_GetTicks();
-    if(animated){
-        if(!downloadAnimationActive_)downloadAnimationStarted_=now;
-        downloadAnimationActive_=true;downloadAnimationLastDraw_=now;
-        downloadAnimationTop_=arrangement.rowTop;
+    if(game&&!downloadAnimationActive_)supplyRun_.resume(now);
+    pump();beginTouch(game?(cancellable?"loading-cancel":"loading-safe"):"loading-normal");
+    const bool cached=game&&SDL_SetRenderTarget(renderer_,downloadScreenCache_)==0;
+    backdrop();
+    const SDL_Rect mark{26,4,94,94};
+    SDL_RenderCopy(renderer_,logo_,nullptr,&mark);
+    text(regular22_,gameName(config::activeGame),136,35,LightText,900);
+    const std::string build=std::string(config::AppVersion)+" · r"+std::to_string(config::AppReleaseRevision);
+    text(regular18_,build,W-32-measure(regular18_,build).first,38,Muted);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,32,100,1248,100);
+    if(!game){
+        text(bold28_,friendly.title,W/2,273,White,1120,true);
+        const int shown=std::clamp(progress,0,100);
+        roundRect({256,354,768,12},5,raisedColor());
+        if(progress>=0&&shown)roundRect({256,354,std::max(12,768*shown/100),12},5,accentColor());
+        text(bold28_,progress<0?"Please wait...":std::to_string(shown)+"%",W/2,385,White,1008,true);
+        wrapped(regular18_,friendly.message,{256,443,768,134},LightText);
+        if(cancellable)footer({{"B",cancelLabel}});
+        else footer({});
+        present();return;
+    }
+    text(bold28_,friendly.title,64,122,White,1152);
+    const int shown=std::clamp(progress,0,100);
+    roundRect({64,185,1058,12},5,raisedColor());
+    if(progress>=0&&shown)roundRect({64,185,std::max(12,1058*shown/100),12},5,accentColor());
+    text(bold28_,progress<0?"—":std::to_string(shown)+"%",1140,168,White,88);
+    std::string detailMessage,elapsed,waitNotice,line;
+    std::istringstream detailLines(friendly.message);
+    while(std::getline(detailLines,line)){
+        if(line.rfind("Elapsed ",0)==0){elapsed=line;continue;}
+        if(line.rfind("This step is taking longer",0)==0){waitNotice=line;continue;}
+        if(!detailMessage.empty())detailMessage+="  |  ";
+        detailMessage+=line;
+    }
+    wrapped(regular18_,detailMessage,{64,211,1152,48},LightText);
+    if(!waitNotice.empty())text(regular18_,waitNotice,64,260,Muted,1152);
+    if(game){
+        SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+        SDL_RenderDrawLine(renderer_,64,287,1216,287);
+        text(bold20_,"SUPPLY RUN",64,300,accentColor(),400);
+        text(bold20_,"SCORE",794,300,Muted,84);
+        text(bold20_,"BEST",1020,300,Muted,84);
+        text(regular22_,"Jump: A / Up or tap. Duck: hold Down or the Duck button.",W/2,581,White,1152,true);
+        text(regular18_,(elapsed.empty()?std::string{}:elapsed+"  |  ")+"Setup continues while you play.",
+             W/2,618,Muted,1152,true);
+        touchTarget({64,336,1152,280},TouchActionKind::Button,int(button::A));
+        if(cancellable)footer({{"A/UP","Jump"},{"DOWN","Hold to duck"},{"B",cancelLabel}});
+        else footer({{"A/UP","Jump"},{"DOWN","Hold to duck"}});
+        const int columnWidth=W/(cancellable?3:2);
+        waitingDuckTouch_={columnWidth+8,663,columnWidth-16,52};
+    }else{
+        const SDL_Rect markLarge{W/2-70,340,140,140};
+        SDL_RenderCopy(renderer_,logo_,nullptr,&markLarge);
+        footer({});
+        text(regular18_,"Operation in progress. Keep the console on.",W/2,679,Muted,1160,true);
+    }
+    if(cached){
         SDL_SetRenderTarget(renderer_,nullptr);
         SDL_RenderCopy(renderer_,downloadScreenCache_,nullptr,nullptr);
-        drawDownloadAnimations(now);
-    }else downloadAnimationActive_=false;
+    }
+    downloadAnimationActive_=game&&cached;
+    downloadAnimationLastDraw_=now;
+    if(game)drawWaitingGame(now);
     present();
 }
 int Ui::modal(const std::string& title,const std::string& body,bool isError,
@@ -723,376 +879,334 @@ int Ui::modal(const std::string& title,const std::string& body,bool isError,
     present();return maximum;
 }
 void Ui::actionCard(SDL_Rect r,const std::string& eyebrow,const std::string& title,const std::string& detail,bool selected,SDL_Color accent,bool enabled){quietPanel(r,selected);text(regular18_,eyebrow,r.x+20,r.y+18,selected&&enabled?accentColor():Muted,r.w-40);text(bold20_,title,r.x+20,r.y+55,enabled?White:Muted,r.w-50);wrapped(regular18_,detail,{r.x+20,r.y+94,r.w-40,r.h-112},enabled?LightText:Muted);if(selected)directionIcon({r.x+r.w-34,r.y+58,20,20},button::Right,enabled?accentColor():Muted);(void)accent;}
-void Ui::home(const GameInstall& install,const Release* release,const std::string& changes,int selected,const std::string& updateStatus,bool repairNeeded,bool restartRequired,int gameChoice){
-    pump();beginTouch(config::ghostsMode()?"home-ghosts":"home");backdrop();header("Unbound HQ",true,gameChoice);
+void Ui::home(const GameInstall& install,const Release* release,const std::string& changes,int selected,const std::string& updateStatus,bool repairNeeded,bool restartRequired,int gameChoice,unsigned mapUpdates){
+    pump();beginTouch(config::ghostsMode()?"home-ghosts":"home");backdrop();header("",true,gameChoice);
     const bool contentFocused=!navigationFocused_;
-    quietPanel({244,121,620,330},contentFocused&&selected==0);
-    touchTarget({244,121,620,330},TouchActionKind::HomeAction,0);
-    text(regular18_,"LATEST RELEASE",264,140,Muted,580);
-    text(bold28_,"What's new",264,173,White,580);
-    SDL_Texture* hero=newsHero_?newsHero_:boot_;
-    int artworkWidth=0,artworkHeight=0;SDL_QueryTexture(hero,nullptr,nullptr,&artworkWidth,&artworkHeight);
-    const SDL_Rect art{264,210,580,148};
-    if(artworkWidth>0&&artworkHeight>0){
-        const double scale=std::min(double(art.w)/artworkWidth,double(art.h)/artworkHeight);
-        const int width=int(artworkWidth*scale),height=int(artworkHeight*scale);
-        const SDL_Rect fitted{art.x+(art.w-width)/2,art.y+(art.h-height)/2,width,height};
-        SDL_RenderCopy(renderer_,hero,nullptr,&fitted);
-    }
-    const std::string& preview=preparedNewsSource_==changes?preparedNewsPreview_:changes;
-    const auto headlineEnd=preview.find('\n');
-    const std::string headline=preview.substr(0,headlineEnd);
+    text(bold38_,config::ghostsMode()?"CALL OF DUTY: GHOSTS":"BLACK OPS II",244,116,White,1008);
+    const std::string version=install.modVersion.empty()?"Not installed":install.modVersion;
+    const std::string region=install.sku?regionName(install.sku->region):"Region unavailable";
+    text(regular18_,"Unbound "+version+" · "+region+" · "+displayLanguage(install.languageFolder),244,174,Muted,1008);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,244,207,1252,207);
+    SDL_RenderDrawLine(renderer_,872,227,872,540);
 
-    text(bold20_,headline,264,363,White,580);
-    text(regular18_,updateStatus,264,397,Muted,580);
-    text(regular18_,"Read full update  >",264,425,contentFocused&&selected==0?accentColor():LightText);
-
-    struct StatusRow {std::string label;std::string value;SDL_Color color;};
-    std::vector<StatusRow> rows;
-    if(install.sku){
-        rows={{"Game",install.base.present?deviceName(install.base.device):"Not found",install.base.present?Green:Red},
-              {"Update",!install.destinationReady?"Unavailable":(install.update.present?deviceName(install.update.device):"Not installed"),install.update.present&&install.destinationReady?LightText:Red},
-              {"Official",officialUpdateSummary(install),officialUpdateStatus(install)==OfficialUpdateStatus::Current?Green:accentColor()},
-              {"Region",install.sku->label,LightText},{"Language",install.languageFolder,LightText},
-              {"Unbound",install.modVersion.empty()?"Not installed":install.modVersion,accentColor()}};
-    }else rows={{"Game","Not found",Red}};
-    // One baseline and one rhythm for all six rows. Values use the full
-    // right-hand column; long regional labels/versions wrap without squeezing
-    // the label or changing the spacing of the neighboring rows.
-    int statusHeight=78+18;
-    for(const auto& row:rows)statusHeight+=std::max(26,flowDocument(regular18_,row.value,216,row.color).height);
-    statusHeight+=static_cast<int>(rows.size()>0?rows.size()-1:0)*8;
-    statusHeight=330;
-    quietPanel({886,121,366,statusHeight});
-    text(bold20_,std::string("Your ")+gameName(config::activeGame),906,142,White,326);
-    SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,906,181,1232,181);
-    int y=199;
-    const SDL_Rect statusClip{906,195,326,statusHeight-86};SDL_RenderSetClipRect(renderer_,&statusClip);
-    for(const auto& row:rows){
-        text(regular18_,row.label,906,y,Muted,100);
-        y+=std::max(26,flowText(regular18_,row.value,1016,y,216,row.color))+8;
+    const SDL_Rect article{244,220,610,320};
+    if(contentFocused&&selected==0){
+        roundRect({article.x-4,article.y-4,article.w+8,article.h+8},8,accentColor());
+        roundRect(article,6,darkColor());
     }
-    SDL_RenderSetClipRect(renderer_,nullptr);
-    if(!install.sku)wrapped(regular18_,"Insert a supported disc or reconnect game storage. HQ stays available while the game is missing.",{906,246,326,126},Muted);
-    const bool canUpdate=install.update.present;const bool updateAvailable=release&&canUpdate&&(install.modVersion=="Not installed"||compareVersions(install.modVersion,release->version)<0);
-    const bool checkFailed=canUpdate&&!release;
+    touchTarget(article,TouchActionKind::HomeAction,0);
+    artworkCover(newsHero_?newsHero_:boot_,{248,224,602,150});
+    text(bold20_,"WHAT'S NEW",248,385,accentColor(),602);
+    const std::string preview=preparedNewsSource_==changes?preparedNewsPreview_:plainNewsPreview(changes);
+    std::istringstream lines(preview);
+    std::string headline,description,line;
+    while(std::getline(lines,line)){
+        line=trim(line);
+        if(line.empty())continue;
+        if(headline.empty())headline=line;
+        else if(description.empty())description=line;
+    }
+    if(headline.empty())headline=config::ghostsMode()?"Ghosts UNC":"Unbound";
+    if(description.empty())description=updateStatus.empty()?"Read the latest release notes.":updateStatus;
+    text(bold28_,headline,248,416,White,602);
+    wrapped(regular18_,description,{248,460,602,48},LightText);
+    text(regular18_,"Read release notes  >",248,511,accentColor(),602);
+
+    text(bold20_,"Your installation",896,225,White,346);
+    const bool canUpdate=install.update.present&&install.destinationReady;
+    const bool coreUpdate=release&&canUpdate&&(version=="Not installed"||compareVersions(version,release->version)<0);
+    const bool updateAvailable=coreUpdate||mapUpdates>0;
+    const bool current=release&&canUpdate&&!updateAvailable&&version!="Not installed";
+    const std::string state=repairNeeded?"Repair required":restartRequired?"Restart required":
+        updateAvailable?(coreUpdate?"Core update available":"Map pack updates available"):current?"Up to date":canUpdate?"Release check unavailable":"Select an update location";
+    if(current&&!repairNeeded&&!restartRequired)checkmark({896,263,17,17},Green);
+    text(regular18_,state,current&&!repairNeeded&&!restartRequired?923:896,258,
+         repairNeeded?Red:current?Green:Muted,346);
+    struct StatusRow {std::string label,value;SDL_Color color;};
+    const std::array<StatusRow,5> rows{{
+        {"Core",version,LightText},
+        {"Official update",officialUpdateSummary(install),officialUpdateStatus(install)==OfficialUpdateStatus::Current?Green:accentColor()},
+        {"Game",install.base.present?deviceName(install.base.device):"Not found",install.base.present?LightText:Muted},
+        {"Storage",install.update.present?deviceName(install.update.device):"Not found",canUpdate?LightText:Muted},
+        {"Language",displayLanguage(install.languageFolder),LightText}
+    }};
+    for(std::size_t i=0;i<rows.size();++i){
+        const int y=294+int(i)*29;
+        text(regular18_,rows[i].label,896,y,Muted,134);
+        text(regular18_,rows[i].value,1044,y,rows[i].color,198);
+        SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+        SDL_RenderDrawLine(renderer_,896,y+29,1242,y+29);
+    }
+    const SDL_Rect launch{896,450,346,52};
+    primaryAction(launch,repairNeeded?"Repair before playing":restartRequired?"Restart before playing":"Launch Game",
+                  contentFocused&&selected==4);
+    touchTarget(launch,TouchActionKind::HomeAction,4);
+    const SDL_Rect manage{896,513,346,31};
+    if(contentFocused&&selected==1)quietPanel(manage,true);
+    const std::string installNote=repairNeeded?"Resume installation":updateAvailable?"Update installed content  >":"Manage installation  >";
+    text(regular18_,installNote,906,517,contentFocused&&selected==1?accentColor():LightText,326);
+    touchTarget(manage,TouchActionKind::HomeAction,1);
     networkSummary(contentFocused&&selected==5);
-    const bool launchFocused=contentFocused&&selected==4;
-    if(launchFocused)roundRect({882,580,374,68},10,White);
-    roundRect({886,584,366,60},8,accentColor());
-    touchTarget({886,584,366,60},TouchActionKind::HomeAction,4);
-    text(bold20_,repairNeeded?"Repair before playing":restartRequired?"Restart Aroma before playing":"Launch Game",1069,601,config::ghostsMode()?Ink:White,326,true);
-    quietPanel({244,584,620,60},contentFocused&&selected==1);
-    touchTarget({244,584,620,60},TouchActionKind::HomeAction,1);
-    const std::string installNote=repairNeeded?"Resume installation":checkFailed?"Check for updates":updateAvailable?"Install available update":"Install / Update";
-    text(bold20_,installNote,264,601,White,580);
     navigationRail(0);
-    if(gameChoice>=0)footer({{"A","Select game"},{"LEFT/RIGHT","Choose game"},{"B","Back"},{"+","Exit"}});
+    if(gameChoice>=0)footer({{"A","Select game"},{"DPAD-LR","Choose game"},{"B","Back"},{"+","Exit"}});
     else if(navigationFocused_)footer({{"A","Open section"},{"UP/DN","Choose section"},{"L","Switch game"},{"+","Exit"}});
-    else footer({{"A",selected==4?"Launch game":(selected==1?"Install / Update":selected==5?"Open Network":"Read update")},{"D-PAD","Navigate"},{"L","Switch game"},{"B","Sidebar"},{"+","Exit"}});
+    else footer({{"A",selected==4?"Launch game":selected==1?"Installation":selected==5?"Network":"Release notes"},
+                 {"D-PAD","Navigate"},{"L","Switch game"},{"B","Sidebar"},{"+","Exit"}});
     present();
 }
 void Ui::installSteps(int current){
-    SDL_SetRenderDrawColor(renderer_,10,12,14,255);SDL_Rect rail{0,102,226,556};SDL_RenderFillRect(renderer_,&rail);
-    text(regular18_,"INSTALLATION",24,134,Muted,180);
+    navigationRail(1,false);
     const std::array<std::string,3> steps{{"Choose content","Review","Install"}};
-    for(int i=0;i<3;++i){const int y=204+i*74;
-        if(i==current)quietPanel({14,y-8,198,58},true);
-        text(bold20_,std::to_string(i+1),28,y+4,i==current?accentColor():Muted,24);
-        text(regular18_,steps[i],58,y+6,i==current?White:Muted,152);
+    for(int i=0;i<3;++i){
+        const int x=244+i*337;
+        circle(x+12,230,12,i<=current?accentColor():raisedColor());
+        if(i<current)checkmark({x+4,222,16,16},config::ghostsMode()?Ink:White);
+        else text(regular18_,std::to_string(i+1),x+12,217,i==current?(config::ghostsMode()?Ink:White):Muted,0,true);
+        text(regular18_,steps[i],x+37,217,i==current?White:Muted,205);
+        if(i<2){
+            SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+            SDL_RenderDrawLine(renderer_,x+220,230,x+312,230);
+        }
     }
-    wrapped(regular18_,"Your selection is saved for next time.",{24,508,178,100},Muted);
 }
-
 
 void Ui::contentQueue(const std::vector<std::pair<std::string,std::string>>& rows,
                       const GameInstall& install,const std::string& total,int scroll){
-    pump();beginTouch("content-queue");backdrop();header("Install / Update");installSteps(1);
-    text(bold28_,"Ready to install",244,126,White,1008);
-    text(regular18_,"Core first, then your selected map packs. Existing downloads can be reused.",244,169,Muted,1008);
-    quietPanel({244,212,606,342});quietPanel({868,212,384,342});
-    const SDL_Rect clip{258,228,576,310};SDL_RenderSetClipRect(renderer_,&clip);
+    pump();beginTouch("content-queue");backdrop();header("");installSteps(1);
+    text(bold38_,"Ready to install",244,116,White,1008);
+    text(regular18_,"Core first, followed by your selected map packs.",244,173,Muted,1008);
+    const SDL_Rect clip=ContentQueueViewport;
+    SDL_RenderSetClipRect(renderer_,&clip);
     for(std::size_t i=0;i<rows.size();++i){
-        const int y=238+int(i)*80-scroll;
+        const int y=clip.y+8+int(i)*80-scroll;
         if(y+70<clip.y||y>clip.y+clip.h)continue;
-        text(bold20_,rows[i].first,270,y,White,554);
-        text(regular18_,rows[i].second,270,y+32,Muted,554);
+        text(bold20_,rows[i].first,260,y,White,574);
+        text(regular18_,rows[i].second,260,y+33,Muted,574);
+        SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+        SDL_RenderDrawLine(renderer_,260,y+70,834,y+70);
     }
     SDL_RenderSetClipRect(renderer_,nullptr);
-    text(regular18_,"INSTALL DESTINATION",892,237,Muted,336);
-    text(bold20_,deviceName(install.update.device),892,270,White,336);
-    text(regular18_,"LANGUAGE",892,317,Muted,336);
-    text(bold20_,install.languageFolder,892,350,White,336);
-    text(regular18_,"PACKAGE TOTAL",892,404,Muted,336);
-    text(bold28_,total,892,437,accentColor(),336);
-    text(regular18_,"Local ZIPs are verified first.",892,494,Muted,336);
-    roundRect({244,587,606,58},8,accentColor());
-    text(bold20_,"Start installation",270,605,White,550);
-    touchTarget({244,587,606,58},TouchActionKind::Button,int(button::A));
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,872,266,872,645);
+    text(bold20_,"Your installation",896,270,White,346);
+    text(regular18_,"Destination",896,320,Muted,346);
+    text(bold20_,deviceName(install.update.device),896,347,White,346);
+    text(regular18_,"Language / region",896,392,Muted,346);
+    text(regular18_,displayLanguage(install.languageFolder)+" / "+(install.sku?regionName(install.sku->region):"Unknown"),896,420,LightText,346);
+    text(regular18_,"Package total",896,471,Muted,346);
+    text(bold28_,total,896,498,accentColor(),346);
+    wrapped(regular18_,"Local ZIPs and saved downloads are verified before use.",{244,583,606,60},Muted);
+    const SDL_Rect start{896,590,346,54};
+    primaryAction(start,"Start installation",true);
+    touchTarget(start,TouchActionKind::Button,int(button::A));
     footer({{"A","Start installation"},{"UP/DN","Scroll queue"},{"B","Change selection"}});present();
 }
 
 void Ui::mapPacks(const std::vector<MapPack>& packs,const std::vector<bool>& selected,
                   const std::vector<std::string>& versions,int focused,
                   const GameInstall& install,const std::string& notice,bool reinstall){
-    pump();beginTouch("map-packs|"+install.languageFolder);backdrop();header("Install / Update");installSteps(0);
-    text(bold28_,"Choose your content",244,121,White,690);
-    text(regular18_,"Select the optional map packs you want to install alongside Core.",244,162,Muted,1008);
-
-    quietPanel({244,199,1008,62});
-    text(bold20_,"Unbound Core",264,218,White,198);
-    pill("REQUIRED",462,215,Muted);
-    text(regular18_,"Install destination",750,219,Muted,220);
-    const std::string destination=install.update.device==Device::USB?"USB storage":"Internal storage (NAND)";
-    pill(destination,951,215,accentColor());
+    pump();beginTouch("map-packs|"+install.languageFolder);backdrop();header("");installSteps(0);
+    text(bold38_,"Choose your content",244,116,White,1008);
+    text(regular18_,"Keep Core installed. Add the map packs you want to play.",244,173,Muted,1008);
+    quietPanel({244,263,1008,52});
+    checkmark({264,280,20,20},accentColor());
+    text(bold20_,"Unbound Core",300,275,White,310);
+    text(regular18_,"Required",610,277,Muted,160);
+    text(regular18_,deviceName(install.update.device),965,277,LightText,267);
 
     const int count=int(packs.size());
     const int selectedCount=int(std::count(selected.begin(),selected.end(),true));
-    const int start=std::clamp(focused-3,0,std::max(0,count-4));
-    text(bold20_,"Optional map packs",244,279,White,286);
-    text(regular18_,std::to_string(selectedCount)+" selected",530,281,Muted,120);
-    if(count>4){
-        directionIcon({677,281,18,18},button::Up,Muted);
-        directionIcon({712,281,18,18},button::Down,Muted);
-        touchTarget({668,272,36,36},TouchActionKind::Button,int(button::Up));
-        touchTarget({704,272,36,36},TouchActionKind::Button,int(button::Down));
-    }
-    for(int i=start;i<count&&i<start+4;++i){
-        const int y=316+(i-start)*61;
-        const SDL_Rect row{244,y,496,55};
-        quietPanel(row,i==focused);
-        const SDL_Rect checkbox{263,y+16,22,22};
-        roundRect(checkbox,4,selected[i]?accentColor():Muted);
-        if(selected[i]){
-            SDL_SetRenderDrawColor(renderer_,Ink.r,Ink.g,Ink.b,255);
-            SDL_RenderDrawLine(renderer_,268,y+27,273,y+32);
-            SDL_RenderDrawLine(renderer_,273,y+32,281,y+22);
-            SDL_RenderDrawLine(renderer_,268,y+28,273,y+33);
-            SDL_RenderDrawLine(renderer_,273,y+33,281,y+23);
-        }else roundRect({265,y+18,18,18},3,panelColor());
-        text(bold20_,packs[i].name,300,y+4,White,422);
-        const auto label=versions[i].empty()?"Available to install":"Installed v"+versions[i];
-        text(regular18_,label,300,y+30,versions[i].empty()?Muted:Green,422);
+    const int start=std::clamp(focused-2,0,std::max(0,count-3));
+    text(bold20_,"Optional map packs",244,336,White,350);
+    text(regular18_,std::to_string(selectedCount)+" selected",638,338,Muted,134);
+    for(int i=start;i<count&&i<start+3;++i){
+        const int y=375+(i-start)*64;
+        const SDL_Rect row{244,y,530,58};
+        if(i==focused)quietPanel(row,true);
+        const bool checked=i<int(selected.size())&&selected[i];
+        roundRect({260,y+17,24,24},4,checked?accentColor():PanelBorder);
+        if(checked)checkmark({263,y+20,18,18},config::ghostsMode()?Ink:White);
+        else roundRect({262,y+19,20,20},3,darkColor());
+        text(bold20_,packs[i].name,300,y+2,White,454);
+        const std::string version=i<int(versions.size())?versions[i]:"";
+        text(regular18_,version.empty()?"Available to install":reinstall&&checked?"Reinstall queued / v"+version:"Installed v"+version,300,y+30,version.empty()?Muted:Green,454);
         touchTarget(row,TouchActionKind::MapPackRow,i);
     }
+    if(count>3){
 
-    quietPanel({759,278,493,276});
-    text(regular18_,"PACK DETAILS",780,295,Muted,450);
-    if(!packs.empty()){
+        directionIcon({687,574,18,18},button::Up,Muted);
+        directionIcon({733,574,18,18},button::Down,Muted);
+        touchTarget({678,561,36,38},TouchActionKind::Button,int(button::Up));
+        touchTarget({724,561,36,38},TouchActionKind::Button,int(button::Down));
+    }
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,794,338,794,646);
+    if(count){
         const int i=std::clamp(focused,0,count-1);
         const auto& pack=packs[i];
-        text(bold28_,pack.name,780,326,White,450);
-        wrapped(regular18_,pack.description,{780,372,450,85},LightText);
-        const auto* release=mapPackRelease(pack,versions[i],reinstall);
-        const auto size=release?std::to_string((release->compressedBytes+1048575)/1048576)+" MiB package":"Installed version is current";
-        text(regular18_,size,780,469,Muted,450);
-        const SDL_Rect details{780,501,449,36};
-        quietPanel(details);
-        text(regular18_,"Full description  >",794,507,accentColor(),413);
+        const auto version=i<int(versions.size())?versions[i]:std::string{};
+        const auto* release=mapPackRelease(pack,version,reinstall);
+        text(bold28_,pack.name,818,335,White,424);
+        wrapped(regular18_,pack.description,{818,382,424,108},LightText);
+        text(regular18_,release?displayPackageSize(release->compressedBytes)+" package":"Installed version is current",818,503,Muted,424);
+        const SDL_Rect details{818,539,424,38};
+        text(regular18_,"Full description  >",818,545,accentColor(),424);
         touchTarget(details,TouchActionKind::MapPackDetails,i);
     }else{
-        quietPanel({244,316,496,55});
-        text(regular18_,"No optional packs available",264,332,Muted,450);
-        wrapped(regular18_,"Continue to review your Core installation.",{780,340,449,92},LightText);
+        text(regular18_,"No optional packs available",244,390,Muted,530);
+        wrapped(regular18_,"Continue to review your Core installation.",{818,382,424,108},LightText);
     }
-
-    text(regular18_,notice,244,567,Muted,1008);
-    const SDL_Rect review{244,602,496,51};
-    quietPanel(review,focused==count);
-    text(bold20_,"Review installation  >",264,616,accentColor(),450);
+    if(!notice.empty())text(regular18_,notice,244,561,Muted,count>3?400:530);
+    const SDL_Rect review{896,594,346,54};
+    primaryAction(review,reinstall?"Review reinstallation":"Review installation",focused==count);
     touchTarget(review,TouchActionKind::MapPackRow,count);
     if(count){
-        const SDL_Rect repair{759,602,493,51};
-        quietPanel(repair,reinstall);
-        text(regular18_,reinstall?"Reinstall selected packs: On":"Reinstall selected packs: Off",
-             780,617,reinstall?accentColor():LightText,450);
-        touchTarget(repair,TouchActionKind::Button,int(button::X));
+        const SDL_Rect repair{244,598,530,50};
+        quietPanel(repair,focused==count+1);
+        roundRect({260,612,23,23},4,reinstall?accentColor():PanelBorder);
+        if(reinstall)checkmark({263,615,17,17},config::ghostsMode()?Ink:White);
+        else roundRect({262,614,19,19},3,darkColor());
+        text(bold20_,"Reinstall selected packs",300,610,reinstall?accentColor():LightText,450);
+        touchTarget(repair,TouchActionKind::MapPackRow,count+1);
     }
     footer({{"A","Select"},{"D-PAD","Navigate"},{"RIGHT","Details"},{"X","Reinstall"},{"B","Back"}});present();
 }
 
 void Ui::installReview(const GameInstall& active,const std::string& latest,
                        const std::string& notice,int selected,bool enabled,
-                       bool sdAvailable,bool repair,bool update){
+                       bool sdAvailable,bool repair,bool update,bool mapsAvailable){
     pump();beginTouch("install-review|"+active.update.root+"|"+active.languageFolder);
-    SDL_SetRenderDrawColor(renderer_,12,15,17,255);SDL_RenderClear(renderer_);
-    header("Install / Update");
-    text(bold38_,repair?"Resume your installation":update?"Ready to update":"Your installation",80,130,White,1100);
-    wrapped(regular18_,notice.empty()?"Review your destination, then install.":notice,{80,185,1120,48},Muted);
-    roundRect({80,246,1120,268},10,PanelBorder);roundRect({81,247,1118,266},9,panelColor());
-    text(regular18_,"UNBOUND RELEASE",112,268,Muted,590);
-    text(bold28_,latest.empty()?"Release unavailable":latest,112,302,White,590);
-    text(regular18_,"Installed: "+(active.modVersion.empty()?std::string("Not installed"):active.modVersion),112,350,Muted,590);
-    text(regular18_,sdAvailable?"Update found on your SD card":"Uses your saved download or the internet",112,390,LightText,590);
-    text(regular18_,"Every package is verified before installation.",112,428,Muted,590);
-    text(regular18_,"INSTALL TO",760,268,Muted,390);
-    text(bold20_,active.update.present?deviceName(active.update.device):"No update storage found",760,302,White,390);
-    text(regular18_,std::string(active.sku?active.sku->key:"Unknown region")+" / "+active.languageFolder,760,342,Muted,390);
-    text(regular18_,"Game: "+std::string(active.base.present?deviceName(active.base.device):"Not found"),760,378,Muted,390);
-    if(selected==0)roundRect({748,422,432,54},6,raisedColor());
-    text(regular18_,"Change storage or language  >",760,438,selected==0?accentColor():LightText,400);
-    touchTarget({748,422,432,54},TouchActionKind::InstallRow,0);
-    roundRect({80,546,480,56},8,enabled?(selected==3?accentColor():raisedColor()):raisedColor());
-    text(bold20_,repair?"Resume installation":sdAvailable?"Verify & install from SD":update?"Choose content & update":"Manage installed content",102,562,enabled?White:Muted,436);
-    if(enabled)touchTarget({80,546,480,56},TouchActionKind::InstallRow,3);
+    backdrop();header("");navigationRail(1);
+    text(bold38_,repair?"Resume installation":"Install / Update",244,116,White,1008);
+    wrapped(regular18_,notice.empty()?"Your game, your content. Review the destination before continuing.":notice,{244,173,1008,65},Muted);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,872,256,872,645);
+    text(bold20_,"Your destination",244,256,White,610);
+    const auto row=[&](const std::string& label,const std::string& value,int y,SDL_Color shade){
+        text(regular18_,label,244,y,Muted,180);
+        text(regular22_,value,440,y,shade,414);
+        SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+        SDL_RenderDrawLine(renderer_,244,y+38,854,y+38);
+    };
+    row("Update storage",active.update.present?deviceName(active.update.device):"Not found",306,White);
+    row("Language",displayLanguage(active.languageFolder),359,White);
+    row("Region",active.sku?active.sku->label:"Not identified",412,LightText);
+    row("Official update",officialUpdateSummary(active),465,
+        officialUpdateStatus(active)==OfficialUpdateStatus::Current?Green:accentColor());
+    const SDL_Rect settings{244,529,610,52};
+    quietPanel(settings,selected==0);
+    text(regular22_,"Change storage or language",264,540,selected==0?accentColor():LightText,550);
+    directionIcon({814,546,20,20},button::Right,Muted);
+    touchTarget(settings,TouchActionKind::InstallRow,0);
+    const bool mapsEnabled=mapsAvailable&&!repair&&!active.modVersion.empty();
+    const SDL_Rect maps{244,598,610,50};
+    quietPanel(maps,selected==5);
+    text(bold20_,"Reinstall map packs",264,609,mapsEnabled?(selected==5?accentColor():LightText):Muted,550);
+    directionIcon({814,613,20,20},button::Right,mapsEnabled?accentColor():Muted);
+    if(mapsEnabled)touchTarget(maps,TouchActionKind::InstallRow,5);
+    text(bold20_,update?"Core update available":"Unbound Core",896,256,White,346);
+    text(regular18_,"Installed",896,306,Muted,150);
+    text(regular18_,active.modVersion.empty()?"Not installed":active.modVersion,1060,306,LightText,182);
+    text(regular18_,"Latest release",896,344,Muted,150);
+    text(bold28_,latest.empty()?"Unavailable":latest,896,376,accentColor(),346);
+    wrapped(regular18_,sdAvailable?"Update ZIP found on your SD card. HQ will verify and install its files.":
+        "Choose Core and optional map packs. Every package is verified before installation.",{896,435,346,100},LightText);
+    const SDL_Rect install{896,548,346,54};
+    primaryAction(install,repair?"Resume installation":sdAvailable?"Install from SD":"Choose content",selected==3,enabled);
+    if(enabled)touchTarget(install,TouchActionKind::InstallRow,3);
     if(sdAvailable&&enabled){
-        if(selected==4)roundRect({590,546,400,56},8,raisedColor());
-        text(regular18_,"Use internet instead",610,564,selected==4?accentColor():Muted,360);
-        touchTarget({590,546,400,56},TouchActionKind::InstallRow,4);
+        const SDL_Rect internet{896,615,346,34};
+        if(selected==4)quietPanel(internet,true);
+        text(regular18_,"Use internet instead",906,620,selected==4?accentColor():Muted,326);
+        touchTarget(internet,TouchActionKind::InstallRow,4);
     }
-    if(!enabled&&selected!=0)suppressedTouchButtons_|=button::A;
-    footer({{"A","Select"},{"D-PAD","Navigate"},{"X/1","Settings"},{"B","Back"}});present();
+    if((!enabled&&(selected==3||selected==4))||(selected==5&&!mapsEnabled))suppressedTouchButtons_|=button::A;
+    footer({{"A","Select"},{"D-PAD","Navigate"},{"Y/2","Map packs"},{"X/1","Settings"},{"B","Back"}});present();
 }
 void Ui::installMenu(const GameInstall& active,const std::vector<InstallOption>& options,
                      const InstallPreferences& draft,int selectedRow,
                      const std::string& latest,const std::string& notice,
                      bool contentAllowed,bool hasUpdatePlan,bool reinstallAvailable,bool inheritedRepairNeeded){
     pump();beginTouch("install|"+active.update.root+"|"+draft.languageFolder);
-    // A quiet backdrop keeps storage details readable without changing other screens.
-    SDL_SetRenderDrawColor(renderer_,12,15,17,255);SDL_RenderClear(renderer_);
-    header("Install / Update");
-    constexpr SDL_Color secondary{151,161,167,255},divider{43,49,53,255};
-    text(bold28_,"Install settings",244,121,White,950);
+    backdrop();header("");navigationRail(1);
+    text(bold38_,"Install settings",244,116,White,1008);
     const bool manualTarget=draft.updateDevice!=Device::Missing||draft.updateTitleId!=0;
     const bool manualLanguage=!draft.languageFolder.empty();
     const bool ready=active.sku&&active.update.present&&active.destinationReady;
     const bool installEnabled=ready&&contentAllowed&&(hasUpdatePlan||reinstallAvailable||inheritedRepairNeeded);
     const std::string message=!ready&&!active.destinationWarning.empty()?active.destinationWarning:
         (!notice.empty()?notice:(!contentAllowed?"Restart HQ and complete its app update before changing game content.":
-         (draft.languageInstallPending?"Language change pending. Install the full release and its patches for this folder.":
-          "Choose storage and language, then save your selection before installing.")));
-    wrapped(regular18_,message,{244,164,1008,50},!ready?Red:secondary);
-
-    const auto panel=[&](SDL_Rect rect){
-        roundRect(rect,9,divider);
-        roundRect({rect.x+1,rect.y+1,rect.w-2,rect.h-2},8,panelColor());
-    };
-    panel({244,226,400,404});
-    panel({662,226,590,404});
+         (draft.languageInstallPending?"Language change pending. Install the full release and current patches for this folder.":
+          "Choose storage and language. Save your selection before installing.")));
+    wrapped(regular18_,message,{244,173,1008,65},!ready?Red:Muted);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,872,256,872,645);
     std::size_t languageCount=0;
     bool manualTargetAvailable=false;
     for(const auto& option:options){
         if(option.install.sku&&option.install.sku->updateTitleId==draft.updateTitleId&&
            option.install.update.device==draft.updateDevice)manualTargetAvailable=true;
-        if(option.install.sku&&active.sku&&
-           option.install.sku->updateTitleId==active.sku->updateTitleId&&
-           option.install.update.device==active.update.device){
-            languageCount=option.languages.size();
-        }
+        if(option.install.sku&&active.sku&&option.install.sku->updateTitleId==active.sku->updateTitleId&&
+           option.install.update.device==active.update.device)languageCount=option.languages.size();
     }
-    const auto row=[&](int index,int y,int height,const std::string& title,
-                       const std::string& value,const std::string& detail,
-                       bool editable,bool enabled){
-        const bool selected=selectedRow==index&&!navigationFocused_;
-        const SDL_Color mainColor=enabled?LightText:secondary;
+    const auto editableRow=[&](int index,int y,const std::string& title,const std::string& value,
+                                const std::string& detail,bool enabled){
+        const SDL_Rect row{244,y,610,91};
+        const bool focused=selectedRow==index&&!navigationFocused_;
+        quietPanel(row,focused);
+        text(regular18_,title,264,y+6,Muted,470);
+        text(bold20_,value,264,y+32,enabled?White:Muted,454);
+        text(regular18_,detail,264,y+62,Muted,570);
+        directionIcon({750,y+34,22,22},button::Left,focused&&enabled?accentColor():Muted);
+        directionIcon({806,y+34,22,22},button::Right,focused&&enabled?accentColor():Muted);
         if(enabled){
-            touchTarget({254,y,editable?272:380,height},TouchActionKind::InstallRow,index);
-            if(editable){
-                touchTarget({526,y+20,48,height-20},TouchActionKind::InstallChoice,index*2);
-                touchTarget({582,y+20,48,height-20},TouchActionKind::InstallChoice,index*2+1);
-            }
-        }
-        if(selected){
-            roundRect({254,y,380,height},6,enabled?accentColor():PanelBorder);
-            roundRect({255,y+1,378,height-2},5,raisedColor());
-            roundRect({254,y+9,3,height-18},1,enabled?accentColor():secondary);
-        }
-        if(editable){
-            text(regular18_,title,268,y+7,secondary,320);
-            text(bold20_,value,268,y+32,enabled?White:secondary,238);
-            text(regular18_,detail,268,y+60,secondary,344);
-            directionIcon({539,y+35,22,22},button::Left,selected&&enabled?accentColor():secondary);
-            directionIcon({595,y+35,22,22},button::Right,selected&&enabled?accentColor():secondary);
-        }else{
-            text(bold20_,title,268,y+(detail.empty()?7:5),selected&&enabled?White:mainColor,320);
-            if(!detail.empty())text(regular18_,detail,268,y+31,secondary,344);
-            directionIcon({595,y+(detail.empty()?10:8),22,22},button::Right,selected&&enabled?accentColor():secondary);
+            touchTarget({244,y,490,91},TouchActionKind::InstallRow,index);
+            touchTarget({734,y,54,91},TouchActionKind::InstallChoice,index*2);
+            touchTarget({790,y,64,91},TouchActionKind::InstallChoice,index*2+1);
         }
     };
-    std::string target,targetRegion;
-    if(manualTarget){
-        const GameSku* savedSku=findSkuByTitle(draft.updateTitleId);
-        target=deviceName(draft.updateDevice);
-        targetRegion=savedSku?savedSku->label:"Saved title";
-    }else if(active.sku&&active.update.present){
-        target=deviceName(active.update.device);
-        targetRegion=active.sku->label;
-    }else{
-        target="No game update found";
-    }
+    const GameSku* savedSku=manualTarget?findSkuByTitle(draft.updateTitleId):active.sku;
+    std::string target=manualTarget?deviceName(draft.updateDevice):active.update.present?deviceName(active.update.device):"No update found";
     if(!manualTarget)target="Auto: "+target;
-    const std::string targetDetail=(targetRegion.empty()?std::string{}:targetRegion+" • ")+
-        (manualTarget&&!manualTargetAvailable?"Unavailable":
-         std::to_string(options.size())+" location"+(options.size()==1?"":"s"));
-    row(0,237,88,"Install destination",target,
-        targetDetail,true,!options.empty());
-    const std::string language=manualLanguage?draft.languageFolder:
-        "Auto: "+(active.languageFolder.empty()?std::string("Not identified"):active.languageFolder);
-    row(1,333,88,"Content language",language,
-        std::to_string(languageCount)+" available language folder"+(languageCount==1?"":"s"),true,languageCount>0);
-    SDL_SetRenderDrawColor(renderer_,divider.r,divider.g,divider.b,255);
-    SDL_RenderDrawLine(renderer_,268,432,620,432);
-    row(2,444,42,"Save selection","","",false,ready&&contentAllowed);
-    const std::string installLabel=inheritedRepairNeeded?"Restore original game files":hasUpdatePlan?(draft.languageInstallPending?
-        "Install selected language":"Download & install"):
-        (reinstallAvailable?"Reinstall current release":"No download available");
-    std::string installDetail;
-    if(!contentAllowed)installDetail="Unavailable until the HQ app update is complete";
-    else if(!ready)installDetail="Choose an available destination first";
-    else if(inheritedRepairNeeded)installDetail="Uses your installed game files";
-    else if(draft.languageInstallPending)installDetail="Full release + current patches";
-    else if(hasUpdatePlan)installDetail="Newest files for this destination";
-    else if(reinstallAvailable)installDetail="Full release + current patches";
-    else installDetail="Check the release feed or rescan";
-    row(3,501,58,installLabel,"",installDetail,false,installEnabled);
-    row(4,575,38,"Reset to Auto","","",false,true);
-
-    text(bold20_,"Selected installation",684,240,White,380);
-    text(regular18_,manualTarget||manualLanguage?"Custom":"Automatic",1178,242,secondary,125,true);
-    const auto statusRow=[&](const std::string& label,const std::string& value,int y,
-                            SDL_Color color=LightText){
-        text(regular18_,label,684,y,secondary,156);
-        text(regular18_,value,848,y,color,382);
+    editableRow(0,256,"Install destination",target,
+        (savedSku?std::string(savedSku->label)+" / ":std::string{})+
+        (manualTarget&&!manualTargetAvailable?"Unavailable":std::to_string(options.size())+" available locations"),!options.empty());
+    editableRow(1,358,"Content language",manualLanguage?displayLanguage(draft.languageFolder):"Auto: "+displayLanguage(active.languageFolder),
+        std::to_string(languageCount)+" available language folders",languageCount>0);
+    text(regular18_,"Region",264,465,Muted,180);
+    text(regular18_,active.sku?active.sku->label:"Not identified",460,465,LightText,374);
+    const auto secondary=[&](SDL_Rect rect,const std::string& label,int index,bool enabled){
+        quietPanel(rect,selectedRow==index&&!navigationFocused_);
+        text(regular18_,label,rect.x+20,rect.y+13,enabled?(selectedRow==index?accentColor():LightText):Muted,rect.w-40);
+        if(enabled)touchTarget(rect,TouchActionKind::InstallRow,index);
     };
-    statusRow("Game storage",active.base.present?deviceName(active.base.device):"Not found",274);
-    statusRow("Update storage",active.update.present?deviceName(active.update.device):"Not found",302,
-              ready?LightText:Red);
-    statusRow("Region",active.sku?active.sku->label:"Not identified",330);
-    statusRow("Language",active.languageFolder.empty()?"Not identified":active.languageFolder,358);
-    SDL_SetRenderDrawColor(renderer_,divider.r,divider.g,divider.b,255);
-    SDL_RenderDrawLine(renderer_,684,396,1230,396);
-    statusRow("Official update",officialUpdateSummary(active),407,
-              officialUpdateStatus(active)==OfficialUpdateStatus::Current?Green:accentColor());
-    statusRow("Installed mod",active.modVersion.empty()?"Not installed":active.modVersion,435);
-    statusRow("Latest release",latest.empty()?"Unavailable":latest,463,
-              latest.empty()?LightText:White);
-    std::ostringstream titleId;
-    if(active.sku){titleId<<std::hex<<std::uppercase;titleId.width(16);titleId.fill('0');
-        titleId<<active.sku->updateTitleId;}
-    SDL_SetRenderDrawColor(renderer_,divider.r,divider.g,divider.b,255);
-    SDL_RenderDrawLine(renderer_,684,500,1230,500);
-    statusRow("Update title",active.sku?titleId.str():"Not identified",512);
-    text(regular18_,"Content folder",684,543,secondary,546);
-    // Keep the volume and title path on separate lines. Wrapping a single
-    // slash-delimited path otherwise makes the destination hard to read.
-    std::string contentPath=active.update.root;
-    if(!contentPath.empty()){
-        const auto volumeEnd=contentPath.find(":/");
-        if(volumeEnd!=std::string::npos)contentPath.insert(volumeEnd+2,"\n");
-        if(contentPath.back()!='/')contentPath+='/';
-        contentPath+="content";
-    }else contentPath="No writable destination selected";
-    wrapped(regular18_,contentPath,{684,569,546,51},ready?LightText:Red);
-    text(regular18_,"Settings do not move your game or change which copy the Wii U Menu launches.",
-         244,633,secondary,1008);
-    const std::string action=selectedRow<2?"Change":
-        (selectedRow==2?"Save":(selectedRow==3?(inheritedRepairNeeded?"Restore":"Install"):"Reset Auto"));
+    secondary({244,511,294,52},"Save selection",2,ready&&contentAllowed);
+    const SDL_Rect rescan{556,511,298,52};
+    quietPanel(rescan);
+    text(regular18_,"Rescan game storage",576,526,LightText,258);
+    touchTarget(rescan,TouchActionKind::Button,int(button::X));
+    secondary({244,578,610,48},"Reset storage and language to Auto",4,true);
+    text(bold20_,hasUpdatePlan?"Core update available":"Unbound Core",896,256,White,346);
+    text(regular18_,"Installed",896,307,Muted,150);
+    text(regular18_,active.modVersion.empty()?"Not installed":active.modVersion,1060,307,LightText,182);
+    text(regular18_,"Latest release",896,343,Muted,346);
+    text(bold28_,latest.empty()?"Unavailable":latest,896,374,accentColor(),346);
+    text(regular18_,"Official update",896,430,Muted,346);
+    text(regular18_,officialUpdateSummary(active),896,460,
+        officialUpdateStatus(active)==OfficialUpdateStatus::Current?Green:accentColor(),346);
+    text(regular18_,"Game: "+std::string(active.base.present?deviceName(active.base.device):"Not found"),896,502,Muted,346);
+    const SDL_Rect install{896,548,346,54};
+    primaryAction(install,inheritedRepairNeeded?"Restore game files":hasUpdatePlan?"Choose content":"Reinstall Core",
+                  selectedRow==3&&!navigationFocused_,installEnabled);
+    if(installEnabled)touchTarget(install,TouchActionKind::InstallRow,3);
+    const std::string detail=inheritedRepairNeeded?"Uses your installed game files":draft.languageInstallPending?"Full release + current patches":
+        !ready?"Select an available destination":!contentAllowed?"Complete the HQ update first":"USB or internal storage only";
+    text(regular18_,detail,896,620,Muted,346);
     const std::array<bool,5> enabledRows{{!options.empty(),languageCount>0,ready&&contentAllowed,installEnabled,true}};
-    if(selectedRow>=0&&selectedRow<5&&!enabledRows[static_cast<std::size_t>(selectedRow)])suppressedTouchButtons_|=button::A;
-    footer({{"A",action},{"D-PAD","Navigate / adjust"},
-            {"X/1","Rescan"},{"B","Back"}},true);
-    navigationRail(1);
-    present();
+    if(selectedRow>=0&&selectedRow<5&&!enabledRows[std::size_t(selectedRow)])suppressedTouchButtons_|=button::A;
+    footer({{"A",selectedRow<2?"Change":selectedRow==2?"Save":selectedRow==3?"Install":"Reset Auto"},
+            {"D-PAD","Navigate / adjust"},{"X/1","Rescan"},{"B","Back"}},true);present();
 }
 void Ui::news(const std::string& changes,int scrollOffset){
     if(newsBlocks_.empty())prepareNews(changes);
@@ -1320,44 +1434,63 @@ void Ui::pluginCatalog(const std::vector<WorkshopPlugin>& plugins,
                        const std::string& catalogNotice,const std::vector<bool>& releaseReady){
     std::string touchIdentity="plugin-catalog";
     for(const auto& plugin:plugins)touchIdentity+='|'+plugin.key;
-    pump();beginTouch(touchIdentity);backdrop();
-    SDL_Rect clip{244,102,1008,556};SDL_RenderSetClipRect(renderer_,&clip);
-    const int top=122-scrollOffset;text(bold28_,"Plugin Workshop",244,top,White,760);
-    text(regular18_,"Curated plugins with verified updates",244,top+44,Muted,1008);
-    if(!catalogNotice.empty())text(regular18_,catalogNotice,244,top+82,
-                                   catalogNotice.find("Could not")==std::string::npos?LightText:accentColor(),1008);
-    if(plugins.empty())wrapped(regular22_,"No plugin listings are currently available. HQ will keep working normally while the Workshop feed is offline.",{268,top+130,960,130},LightText);
+    pump();beginTouch(touchIdentity);backdrop();header("");navigationRail(2);
+    text(bold38_,"Workshop",244,116,White,1008);
+    text(regular18_,"The plugins that power your setup.",244,173,Muted,1008);
+    if(!catalogNotice.empty())text(regular18_,catalogNotice,244,205,Muted,1008);
+    const SDL_Rect clip{244,234,574,408};SDL_RenderSetClipRect(renderer_,&clip);
+    const auto stateFor=[&](std::size_t i){
+        std::pair<std::string,SDL_Color> state{"Open to check",Muted};
+        if(i>=statuses.size()||i>=checked.size()||!checked[i])return state;
+        const auto& status=statuses[i];
+        state={"Not installed",Muted};
+        if(status.presence==PluginPresence::Managed){
+            const bool updateKnown=i<releaseReady.size()&&releaseReady[i]&&status.updateAvailable;
+            state={updateKnown?"Update available":"Installed",updateKnown?accentColor():Green};
+        }else if(status.presence==PluginPresence::Unmanaged)state={"Manual install",accentColor()};
+        else if(status.presence==PluginPresence::Damaged)state={status.repairable?"Repair needed":"Manual recovery",Red};
+        return state;
+    };
     for(std::size_t i=0;i<plugins.size();++i){
-        SDL_Rect card{244,top+112+int(i)*142,1008,126};if(card.y+card.h<102||card.y>658)continue;
-        quietPanel(card,i==selected);
-        touchTarget(card,TouchActionKind::PluginRow,static_cast<int>(i),&clip);
-        SDL_Rect art{card.x+10,card.y+10,106,106};
-        SDL_Texture* artwork=pluginArtwork(plugins[i]);
-        SDL_RenderCopy(renderer_,artwork,nullptr,&art);
-        text(bold20_,plugins[i].name,card.x+138,card.y+13,White,590);
-        text(regular18_,"by "+plugins[i].creator,card.x+138,card.y+45,Muted,590);
-        text(regular18_,plugins[i].description,card.x+138,card.y+78,Muted,590);
-        std::string state="OPEN TO CHECK";SDL_Color stateColor=LightText;
-        if(i<statuses.size()&&i<checked.size()&&checked[i]){
-            const auto& status=statuses[i];
-            state="NOT INSTALLED";stateColor=Muted;
-            if(status.presence==PluginPresence::Managed){const bool updateKnown=i<releaseReady.size()&&releaseReady[i]&&status.updateAvailable;state=updateKnown?"UPDATE AVAILABLE":"INSTALLED";stateColor=updateKnown?accentColor():LightText;}
-            else if(status.presence==PluginPresence::Unmanaged){state="MANUAL INSTALL";stateColor=accentColor();}
-            else if(status.presence==PluginPresence::Damaged){state=status.repairable?"REPAIR NEEDED":"MANUAL RECOVERY";stateColor=Red;}
-        }
-        text(regular18_,state,card.x+754,card.y+24,stateColor,228);
-        if(i<statuses.size()&&i<checked.size()&&checked[i]&&
-           statuses[i].presence==PluginPresence::Managed&&
-           (i>=releaseReady.size()||!releaseReady[i]))
-            wrapped(regular18_,"Latest check unavailable",{card.x+754,card.y+58,228,54},Muted);
-        else text(regular18_,"Aroma plugin",card.x+754,card.y+67,Muted,228);
+        const SDL_Rect row{244,234+int(i)*142-scrollOffset,574,126};
+        if(row.y+row.h<clip.y||row.y>clip.y+clip.h)continue;
+        quietPanel(row,i==selected);
+        touchTarget(row,TouchActionKind::PluginRow,int(i),&clip);
+        const SDL_Rect art{row.x+14,row.y+20,80,80};
+        SDL_RenderCopy(renderer_,pluginArtwork(plugins[i]),nullptr,&art);
+        text(bold20_,plugins[i].name,row.x+112,row.y+14,White,440);
+        text(regular18_,"by "+plugins[i].creator,row.x+112,row.y+46,Muted,440);
+        const auto state=stateFor(i);
+        if(state.second.g==Green.g)checkmark({row.x+112,row.y+88,16,16},Green);
+        text(regular18_,state.first,row.x+112+(state.second.g==Green.g?26:0),row.y+82,state.second,414);
     }
-    pluginCatalogMaximumScroll_=std::max(0,122+112+int(plugins.size())*142-16-642);
-    SDL_RenderSetClipRect(renderer_,nullptr);header("Plugin Workshop");
-    scrollBar({244,118,996,524},scrollOffset,pluginCatalogMaximumScroll_);
-    navigationRail(2);
-    footer({{"A","Open plugin"},
-            {"UP/DN","Navigate"},{"X/1","Refresh"},{"B","HQ"},{"+","Exit"}});present();
+    SDL_RenderSetClipRect(renderer_,nullptr);
+    pluginCatalogMaximumScroll_=std::max(0,int(plugins.size())*142-16-408);
+    scrollBar(clip,scrollOffset,pluginCatalogMaximumScroll_);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,848,239,848,643);
+    if(plugins.empty()){
+        wrapped(regular22_,"No plugin listings are available. Try refreshing the Workshop.",{244,274,574,144},LightText);
+    }else{
+        const std::size_t i=std::min(selected,plugins.size()-1);
+        const auto& plugin=plugins[i];
+        text(bold28_,plugin.name,878,238,White,364);
+        wrapped(regular18_,plugin.description,{878,288,364,126},LightText);
+        const auto state=stateFor(i);
+        text(regular18_,"Status",878,436,Muted,130);
+        text(regular18_,state.first,1016,436,state.second,226);
+        if(i<statuses.size()&&!statuses[i].installedVersion.empty()){
+            text(regular18_,"Installed",878,473,Muted,130);
+            text(regular18_,statuses[i].installedVersion,1016,473,LightText,226);
+        }
+        if(i<statuses.size()&&i<checked.size()&&checked[i]&&statuses[i].presence==PluginPresence::Managed&&
+           (i>=releaseReady.size()||!releaseReady[i]))
+            text(regular18_,"Latest release check unavailable",878,512,Muted,364);
+        const SDL_Rect open{878,558,364,54};
+        primaryAction(open,"Manage plugin",!navigationFocused_);
+        touchTarget(open,TouchActionKind::PluginRow,int(i));
+        text(regular18_,"Review releases and auto-update settings",878,625,Muted,364);
+    }
+    footer({{"A","Open plugin"},{"UP/DN","Navigate"},{"X/1","Refresh"},{"B","HQ"},{"+","Exit"}});present();
 }
 
 void Ui::pluginDetails(const WorkshopPlugin& plugin,const PluginRelease* release,
@@ -1452,20 +1585,25 @@ void Ui::commentEditor(const WorkshopMod& mod,const std::string& draft,int selec
 
 namespace unbound {
 void Ui::networkSummary(bool focused){
- quietPanel({244,466,1008,100},focused);touchTarget({244,466,1008,100},TouchActionKind::HomeAction,5);
- networkGlobe_.draw(renderer_,310,516,40,globeYaw_,globePitch_,networkStats_.cells,
-                    config::ghostsMode()?accentColor():SDL_Color{255,105,18,255});
- text(bold20_,"UNC NETWORK",378,480,accentColor(),250);
- text(regular18_,networkStats_.stale?"Last known activity  >":"Explore the globe  >",378,522,Muted,265);
- const auto stat=[&](unsigned n,const char* label,int x){text(bold28_,networkStats_.available?std::to_string(n):"--",x,480,White,200);text(regular18_,label,x,522,Muted,210);};
- if(config::ghostsMode()){
-     stat(networkStats_.players,"Reported players",660);
-     stat(networkStats_.servers,"Advertised lobbies",940);
- }else{
-     stat(networkStats_.players,"Players online",660);
-     stat(networkStats_.servers,"Servers",846);
-     stat(networkStats_.unique,"Unique today (UTC)",1008);
- }
+    const SDL_Rect panel{244,550,1008,100};
+    quietPanel(panel,focused);
+    touchTarget(panel,TouchActionKind::HomeAction,5);
+    networkGlobe_.draw(renderer_,310,600,40,globeYaw_,globePitch_,networkStats_.cells,
+                       config::ghostsMode()?accentColor():SDL_Color{255,105,18,255});
+    text(bold20_,"UNC Network",378,565,accentColor(),250);
+    text(regular18_,networkStats_.stale?"Last known activity  >":"Explore the globe  >",378,609,Muted,265);
+    const auto stat=[&](unsigned value,const char* label,int x,int width){
+        text(bold28_,networkStats_.available?std::to_string(value):"--",x,562,White,width);
+        text(regular18_,label,x,609,Muted,width);
+    };
+    if(config::ghostsMode()){
+        stat(networkStats_.players,"Reported players",660,245);
+        stat(networkStats_.servers,"Advertised lobbies",940,292);
+    }else{
+        stat(networkStats_.players,"Players online",660,170);
+        stat(networkStats_.servers,"Servers",846,150);
+        stat(networkStats_.unique,"Unique today (UTC)",1008,224);
+    }
 }
 void Ui::network(){
  pump();beginTouch("network");backdrop();header("Network",true);
@@ -1492,5 +1630,68 @@ void Ui::network(){
      text(regular18_,"Menus, lobbies and matches",906,556,Muted,320);
  }
  navigationRail(5);footer({{"D-PAD","Rotate / drag globe"},{"B","Back"}});present();
+}
+}
+
+namespace unbound {
+void Ui::quickUpdate(const GameInstall& install,const std::vector<QuickUpdateRow>& rows,bool coreCurrent,int scroll){
+    pump();beginTouch("quick-update");backdrop();header("");navigationRail(1);
+    text(bold38_,"Updates available",244,116,White,1008);
+    text(regular18_,"Bring your installed content up to date.",244,174,Muted,1008);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
+    SDL_RenderDrawLine(renderer_,244,215,1252,215);
+    SDL_RenderDrawLine(renderer_,872,238,872,645);
+    text(bold20_,"Ready to update",244,235,White,610);
+
+    std::uint64_t total=0;
+    const SDL_Rect clip{244,276,610,242};
+    SDL_RenderSetClipRect(renderer_,&clip);
+    int y=278-scroll;
+    for(const auto& row:rows){
+        total+=row.bytes;
+        if(y+108<clip.y||y>clip.y+clip.h){y+=126;continue;}
+        quietPanel({244,y,610,108});
+        roundRect({263,y+23,24,24},4,accentColor());
+        checkmark({266,y+26,18,18},config::ghostsMode()?Ink:White);
+        text(bold20_,row.title,307,y+12,White,375);
+        const auto size=displayPackageSize(row.bytes);
+        text(regular18_,size,834-measure(regular18_,size).first,y+15,Muted,160);
+        text(regular18_,row.installed,307,y+43,Muted,130);
+        directionIcon({383,y+46,18,18},button::Right,Muted);
+        text(bold20_,row.latest,423,y+41,accentColor(),260);
+        text(regular18_,row.detail,307,y+77,LightText,527);
+        y+=126;
+    }
+    SDL_RenderSetClipRect(renderer_,nullptr);
+    scrollBar(clip,scroll,quickUpdateMaximumScroll(rows.size()));
+    y=rows.size()>2?530:278+int(rows.size())*126;
+    if(coreCurrent&&rows.size()<2){
+        checkmark({261,y+13,18,18},Green);
+        text(regular18_,"Unbound Core "+install.modVersion+" is up to date",293,y+6,Green,550);
+        y+=57;
+    }
+
+    const int savedY=std::max(548,y+10);
+    text(regular18_,"USING YOUR SAVED INSTALLATION",244,savedY,Muted,610);
+    text(regular22_,std::string(deviceName(install.update.device))+"  /  "+displayLanguage(install.languageFolder)+"  /  "+
+         (install.sku?regionName(install.sku->region):"Unknown"),244,savedY+31,White,610);
+    text(regular18_,"Saved packages are reused and verified before installing.",244,620,Muted,610);
+
+    text(bold20_,"Update summary",896,235,White,346);
+    checkmark({896,292,18,18},Green);
+    text(regular22_,std::to_string(rows.size())+(rows.size()==1?" update selected":" updates selected"),925,283,White,317);
+    text(regular18_,"Total download",896,343,Muted,346);
+    text(bold38_,displayPackageSize(total),896,373,accentColor(),346);
+    wrapped(regular18_,"Your saved location and language are ready.",{896,446,346,63},LightText);
+
+    const SDL_Rect update{896,536,346,60};
+    primaryAction(update,"Update now",true,!rows.empty());
+    touchTarget(update,TouchActionKind::Button,int(button::A));
+    const SDL_Rect options{896,613,346,34};
+    text(regular18_,"Update options  >",914,618,Muted,310);
+    touchTarget(options,TouchActionKind::Button,int(button::X));
+    if(rows.size()>2)footer({{"A","Update now"},{"UP/DN","Scroll updates"},{"X/1","Update options"},{"B","Back"}});
+    else footer({{"A","Update now"},{"X/1","Update options"},{"B","Back"}});
+    present();
 }
 }

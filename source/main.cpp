@@ -94,6 +94,7 @@ AppInput readUiInput(Ui& ui,std::optional<TouchAction>* selectedAction=nullptr){
         else if(selectedAction)*selectedAction=action;
     }
     input.buttons=dismissBeforeActivate(input.buttons);
+    ui.waitingGameInput(input.buttons,input.held,input.touch);
     return input;
 }
 
@@ -135,7 +136,7 @@ void downloadScreen(Ui& ui,DownloadControl& control,const std::string& title,
                     const std::string& detail,int percent){
     const auto input=readUiInput(ui);
     if(input.buttons&(button::B|button::Plus))control.requestCancel();
-    ui.loading(control.cancelRequested()?"Stopping download safely":title,
+    ui.downloadLoading(control.cancelRequested()?"Stopping download safely":title,
         control.cancelRequested()?"Finishing buffered SD writes and saving any resumable progress.":detail,
         percent,!control.cancelRequested());
 }
@@ -175,7 +176,7 @@ bool confirmAction(Ui& ui,const std::string& title,const std::string& body,const
     return false;
 }
 
-int pluginCatalogMaximumScroll(std::size_t count){return std::max(0,122+112+int(count)*142-16-642);}
+int pluginCatalogMaximumScroll(std::size_t count){return std::max(0,int(count)*142-16-408);}
 int localModsMaximumScroll(std::size_t count){return std::max(0,int(count)*82-390);}
 
 bool placeholderServer(){const std::string url=config::gameReleasesUrl();return url.find("example.com")!=std::string::npos||url.find("YOUR_GITHUB_NAME")!=std::string::npos;}
@@ -451,7 +452,7 @@ bool downloadAndInstallPlugin(Ui& ui,PluginRuntime& runtime,bool replaceUnmanage
     if(!runtime.releaseReady){error="No verified release is available for this plugin";return false;}
     const std::string archive=std::string(config::PluginCacheRoot)+"/"+
         lowerKey(runtime.plugin.key)+"-r"+std::to_string(runtime.release.revision)+".zip";
-    ui.loading("Downloading "+runtime.plugin.name,"Starting the verified plugin download...",0,true);
+    ui.downloadLoading("Downloading "+runtime.plugin.name,"Starting the verified plugin download...",0,true);
     DownloadControl control;
     DownloadInputContext inputContext{ui,control};
     control.setInputPoll(pollDownloadInput,&inputContext);
@@ -468,9 +469,9 @@ bool downloadAndInstallPlugin(Ui& ui,PluginRuntime& runtime,bool replaceUnmanage
        static_cast<unsigned long long>(info.st_size)!=runtime.release.compressedBytes){
         std::remove(archive.c_str());error="The verified plugin download did not match its declared size";return false;
     }
-    ui.loading("Installing "+runtime.plugin.name,"Preparing a verified Aroma install...",0);
+    ui.installLoading("Installing "+runtime.plugin.name,"Preparing a verified Aroma install...",0);
     ProgressCallback installProgress=[&ui,&runtime](const std::string&,const std::string& detail,int percent){
-        ui.loading("Installing "+runtime.plugin.name,detail,percent);
+        ui.installLoading("Installing "+runtime.plugin.name,detail,percent);
     };
     const bool installerReportedSuccess=installPluginArchive(
         archive,runtime.plugin,runtime.release,replaceUnmanaged,error,installProgress);
@@ -528,7 +529,7 @@ bool getPackage(Ui& ui,const std::string& label,const std::string& url,const std
         error="Could not inspect the saved package on SD: "+std::string(std::strerror(errno))+". No new download was started.";return false;
     }
     DownloadControl control;
-    ui.loading("Downloading "+label,"Starting the package transfer...",0,true);
+    ui.downloadLoading("Downloading "+label,"Starting the package transfer...",0,true);
     DownloadInputContext inputContext{ui,control};
     control.setInputPoll(pollDownloadInput,&inputContext);
     ProgressCallback transfer=[&ui,&label,&control](const std::string&,const std::string& detail,int percent){downloadScreen(ui,control,"Downloading "+label,detail,percent);};
@@ -590,7 +591,7 @@ InheritedRepairOutcome ensureInheritedRepair(Ui& ui,const GameInstall& install,b
     body+="Keep the game closed until this finishes.";
     if(!confirmAction(ui,"Restore original game files?",body,"RESTORE FILES"))return InheritedRepairOutcome::Blocked;
     std::string repairError;
-    const ProgressCallback progress=[&ui](const std::string& title,const std::string& detail,int percent){ui.loading(title,detail,percent);};
+    const ProgressCallback progress=[&ui](const std::string& title,const std::string& detail,int percent){ui.installLoading(title,detail,percent);};
     if(!repairInheritedContent(install,repairError,progress)){
         inheritedRepairGate.observe(install.update.root,false,true,repairError);
         std::string ignored;
@@ -751,7 +752,7 @@ AppUpdateOutcome checkForApplicationUpdate(Ui& ui,std::string& sharedReleaseFeed
     if(stagedReady){
         ui.loading("Updating Unbound HQ","Using the previously verified HQ download...",100);
     }else{
-        ui.loading("Updating Unbound HQ","Starting the verified application download...",0,true);
+        ui.downloadLoading("Updating Unbound HQ","Starting the verified application download...",0);
         const auto maximum=std::min<unsigned long long>(latest->fileBytes,
                                                          config::MaxAppUpdateBytes);
         if(!downloadFile(latest->downloadUrl,config::AppUpdateStagingPath,error,progress,
@@ -767,14 +768,14 @@ AppUpdateOutcome checkForApplicationUpdate(Ui& ui,std::string& sharedReleaseFeed
         error="The verified HQ download did not match its declared file size";
         return AppUpdateOutcome::Failed;
     }
-    ui.loading("Installing Unbound HQ","Preserving the current WUHB and committing the update...",100);
+    ui.installLoading("Installing Unbound HQ","Preserving the current WUHB and committing the update...",100);
     if(!installApplicationUpdate(config::AppUpdateStagingPath,error)){
         return AppUpdateOutcome::Failed;
     }
     return AppUpdateOutcome::Installed;
 }
 bool useInternetPackageSource=false;
-bool installCoreStep(Ui& ui,GameInstall& install,const Release& release,std::size_t step,std::size_t count,std::string& error,bool replayFull=false){
+bool installCoreStep(Ui& ui,GameInstall& install,const Release& release,std::size_t step,std::size_t count,std::string& error,bool replayFull=false,bool automaticLocalSource=false){
     if(!install.destinationReady){error=install.destinationWarning.empty()?"The selected installation is unavailable":install.destinationWarning;return false;}
     if(!(replayFull&&release.kind==ReleaseKind::Full)&&!releaseAppliesToInstalledVersion(release,install.modVersion)){
         if(release.kind==ReleaseKind::Patch)error="Patch "+release.version+" supports "+release.fromVersion+" or newer prior patch levels, but "+install.modVersion+" is installed";
@@ -788,7 +789,7 @@ bool installCoreStep(Ui& ui,GameInstall& install,const Release& release,std::siz
     for(const auto& candidate:useInternetPackageSource?std::vector<std::string>{}:sdPackageCandidates(release.downloadUrl,selectedSdPackageRoot())){
         struct stat local{};
         if(lstat(candidate.c_str(),&local)!=0||!S_ISREG(local.st_mode))continue;
-        if(!confirmAction(ui,"Update found on SD card",
+        if(!automaticLocalSource&&!confirmAction(ui,"Update found on SD card",
             label+"\n\nsd:"+candidate.substr(sizeof("fs:/vol/external01")-1)+
             "\n\nInstall this ZIP directly from SD? HQ will verify it against the release before changing game files. Your ZIP will be kept.\n\nB uses the saved download or internet instead.","USE SD PACKAGE"))break;
         DownloadControl checkingControl;
@@ -818,7 +819,7 @@ bool installCoreStep(Ui& ui,GameInstall& install,const Release& release,std::siz
         recoveryRecord=std::move(writing);armed=true;return true;
     };
     ui.loading("Checking "+label,"Opening the package and checking its destination before unpacking. Keep the console on.",-1);
-    ProgressCallback progress=[&ui,&label](const std::string& stage,const std::string& detail,int percent){ui.loading(stage+": "+label,detail,percent);};
+    ProgressCallback progress=[&ui,&label](const std::string& stage,const std::string& detail,int percent){ui.installLoading(stage+": "+label,detail,percent);};
     if(!installCoreArchive(archive,install,release.version,error,progress,beforeMutation)){
         if(!armed&&!coreRecoveryNeedsRepair(recoveryRecord))
             error+="\n\nInstallation has not started. Your saved download was kept; correct the issue and retry. The installed version was not changed.";
@@ -835,7 +836,7 @@ bool installCoreStep(Ui& ui,GameInstall& install,const Release& release,std::siz
     if(archive==cachedArchive)std::remove(archive.c_str());
     return true;
 }
-bool installCorePlan(Ui& ui,GameInstall& install,const std::vector<const Release*>& plan,std::string& error,bool replayFull=false){
+bool installCorePlan(Ui& ui,GameInstall& install,const std::vector<const Release*>& plan,std::string& error,bool replayFull=false,bool automaticLocalSource=false){
     downloadWasCancelled=false;
     refreshRecovery(true);
     if(recoveryStatus==CoreRecoveryLoadStatus::Invalid){error=recoveryWarning;return false;}
@@ -856,7 +857,7 @@ bool installCorePlan(Ui& ui,GameInstall& install,const std::vector<const Release
     while(recoveryRecord.currentStep<recoveryRecord.plan.size()){
         const auto step=recoveryRecord.currentStep;
         const auto release=recoveryRecord.plan[step];
-        if(!installCoreStep(ui,install,release,step,recoveryRecord.plan.size(),error,recoveryRecord.replayFull&&step==0)){
+        if(!installCoreStep(ui,install,release,step,recoveryRecord.plan.size(),error,recoveryRecord.replayFull&&step==0,automaticLocalSource)){
             if(downloadWasCancelled)error="Operation stopped safely. Reopen Install / Update to retry package "+std::to_string(step+1)+" of "+std::to_string(recoveryRecord.plan.size())+".\n\n"+error;
             else error="Package "+std::to_string(step+1)+" of "+std::to_string(recoveryRecord.plan.size())+" stopped.\n"+error;
             return false;
@@ -984,7 +985,8 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
             if(reviewPage)ui.installReview(proposed,latestReleaseVersion(releases,proposed.sku),
                 proposed.destinationReady?recoveryNotice:proposed.destinationWarning,selectedRow,
                 contentAllowed&&proposed.destinationReady&&proposed.update.present&&(next||inheritedRepairGate.blocked()),
-                reviewSd,inheritedRepairGate.blocked()||(recoveryStatus==CoreRecoveryLoadStatus::Pending),!normalPlan.empty());
+                reviewSd,inheritedRepairGate.blocked()||(recoveryStatus==CoreRecoveryLoadStatus::Pending),!normalPlan.empty(),
+                contentAllowed&&proposed.destinationReady&&proposed.update.present&&!proposed.modVersion.empty());
             else ui.installMenu(proposed,options,draft,selectedRow,latestReleaseVersion(releases,proposed.sku),displayNotice,
                            contentAllowed,!normalPlan.empty()||recoveryStatus==CoreRecoveryLoadStatus::Pending,!fullPlan.empty(),inheritedRepairGate.blocked());
             redraw=false;
@@ -994,11 +996,12 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
         auto buttons=(input.buttons&~(button::Up|button::Down|button::Left|button::Right))|
                            navigation.update(input.buttons,input.held,SDL_GetTicks());
         int nextSection=-1;
+        bool mapsOnlyRequested=false;
         if(touch){
             if(touch->kind==TouchActionKind::Sidebar&&touch->value>=0&&touch->value<=5){
                 if(touch->value==1)continue;
                 nextSection=touch->value;buttons|=button::B;
-            }else if(touch->kind==TouchActionKind::InstallRow&&touch->value>=0&&touch->value<=4){
+            }else if(touch->kind==TouchActionKind::InstallRow&&touch->value>=0&&touch->value<=5){
                 selectedRow=touch->value;redraw=true;
                 if(selectedRow>=2)buttons|=button::A;
             }else if(touch->kind==TouchActionKind::InstallChoice&&touch->value>=0&&touch->value<=3){
@@ -1010,13 +1013,21 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
         if(reviewPage){
             if(touch&&touch->kind==TouchActionKind::InstallRow)buttons|=button::A;
             if(buttons&(button::Up|button::Down|button::Left|button::Right)){
-                selectedRow=selectedRow==3?0:(selectedRow==0&&reviewSd?4:3);redraw=true;
+                std::vector<int> rows{3,5,0};if(reviewSd)rows.push_back(4);
+                const auto current=std::find(rows.begin(),rows.end(),selectedRow);
+                const int index=current==rows.end()?0:int(current-rows.begin());
+                const int direction=buttons&(button::Up|button::Left)?-1:1;
+                selectedRow=rows[(index+direction+int(rows.size()))%int(rows.size())];redraw=true;
                 buttons&=~(button::Up|button::Down|button::Left|button::Right);
             }
             if((buttons&button::X)||((buttons&button::A)&&selectedRow==0)){
                 reviewPage=false;selectedRow=0;redraw=true;continue;
             }
-            if(buttons&button::A){useInternetPackageSource=selectedRow==4;selectedRow=3;}
+            if(buttons&button::Y){selectedRow=5;buttons|=button::A;}
+            if(buttons&button::A){
+                mapsOnlyRequested=selectedRow==5;
+                useInternetPackageSource=selectedRow==4;selectedRow=3;
+            }
         }else if((buttons&button::B)&&nextSection<0){
             if(!sameInstallPreferences(draft,saved)&&!confirmAction(ui,"Discard unsaved selection?","Keep the saved storage and language?","DISCARD")){redraw=true;continue;}
             draft=saved;reviewPage=true;selectedRow=3;redraw=true;continue;
@@ -1031,6 +1042,7 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
             redraw=true;
             continue;
         }
+        if(!reviewPage&&(buttons&button::Y)){mapsOnlyRequested=true;selectedRow=3;buttons|=button::A;}
         if(buttons&button::X)rescan();
         if(buttons&button::Up){selectedRow=(selectedRow+4)%5;redraw=true;}
         if(buttons&button::Down){selectedRow=(selectedRow+1)%5;redraw=true;}
@@ -1088,7 +1100,11 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
                         continue;
                     }
                 }
-                bool fullReplay=saved.languageInstallPending||!reviewPage;
+                if(mapsOnlyRequested&&(saved.languageInstallPending||recoveryStatus==CoreRecoveryLoadStatus::Pending||
+                   install.modVersion.empty()||(!sdCoreVersion.empty()&&compareVersions(install.modVersion,sdCoreVersion)<0))){
+                    waitModal(ui,"Finish Core first","Install or resume the compatible Core release before reinstalling map packs. No map files were changed.",true);continue;
+                }
+                bool fullReplay=!mapsOnlyRequested&&(saved.languageInstallPending||!reviewPage);
                 if(recoveryStatus==CoreRecoveryLoadStatus::Pending){
                     auto refreshed=recoveryRecord;
                     bool sizeChanged=false;
@@ -1104,7 +1120,7 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
                         recoveryRecord=std::move(refreshed);
                     }
                 }
-                auto plan=selectedInstallPlan(releases,install,fullReplay);
+                auto plan=mapsOnlyRequested?std::vector<const Release*>{}:selectedInstallPlan(releases,install,fullReplay);
                 const bool resuming=recoveryStatus==CoreRecoveryLoadStatus::Pending;
                 bool freshRestart=false;
                 if(resuming){
@@ -1142,11 +1158,11 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
                     waitModal(ui,"No install path","The release feed has no complete compatible package path for this destination. No game files were changed.",true);continue;
                 }
                 std::vector<MapJob> mapJobs;
-                if(!chooseMapPacks(ui,install,mapJobs))continue;
+                if(!chooseMapPacks(ui,install,mapJobs,mapsOnlyRequested))continue;
                 if(plan.empty()&&!resuming&&mapJobs.empty()){
                     std::string migrationError;
                     if(!finishContentMigration(ui,install,migrationError)){waitModal(ui,"Plugin needs attention",migrationError,true);continue;}
-                    waitModal(ui,"Everything is up to date","Core and your selected map packs are current. Press A to return to HQ.");
+                    waitModal(ui,"Everything is up to date",mapsOnlyRequested?"Your selected map packs are current. Core was left unchanged.":"Core and your selected map packs are current. Press A to return to HQ.");
                     return InstallMenuResult::Completed;
                 }
                 const auto officialWarning=officialUpdateWarning(install);
@@ -1218,6 +1234,8 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
     }
     return InstallMenuResult::Back;
 }
+
+#include "quick_update_flow.hpp"
 
 #ifdef UNBOUND_DIAGNOSTIC_SD
 // A separate, local-only entry point. Do not run the public self-updater,
@@ -1335,6 +1353,12 @@ int main(){
     }
     ProgressCallback startup=[&ui](const std::string& title,const std::string& detail,int percent){ui.loading(title,detail,percent);};
     if(!initializePlatform(error,startup)){waitModal(ui,"Startup error",error,true);shutdownPlatform();ui.shutdown();WHBLogCafeDeinit();shutdownInput();WHBProcShutdown();return 1;}
+    setOperationFrameCallback([&ui]{
+        if(ui.waitingGameActive()){
+            readUiInput(ui);
+            ui.animateDownloadWaiting();
+        }
+    });
 
 #ifdef UNBOUND_DIAGNOSTIC_SD
     const auto diagnosticLaunch=runSdDiagnostic(ui,startup);
@@ -1373,6 +1397,7 @@ int main(){
     bool installSettingsLoaded=false;
     std::vector<Release> releases;
     std::string changes,updateStatus,networkWarning;
+    unsigned availableMapUpdates=0;
     const auto loadGame=[&](){
         mapRepairPending=false;
         inheritedRepairGate.clear();
@@ -1445,6 +1470,7 @@ int main(){
         ui.loading(newsUpdated?"Updating What's New":"Opening Unbound HQ",newsUpdated?"Building the updated What's New display...":"Preparing the unchanged What's New display...",95);ui.prepareNews(changes);
         addStartupNotice("NETWORK AND RELEASES",networkWarning);
         if(releases.empty())startupNeedsAttention=true;
+        availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
     };
     std::string retirementReminder,retirementError;
     const auto retirementPath=std::string(config::SdRoot)+"/state/retirement-restart.txt";
@@ -1558,7 +1584,8 @@ int main(){
         const auto plan=selectedInstallPlan(releases,install,installPreferences.languageInstallPending);
         const bool behind=!latest.empty()&&(install.modVersion=="Not installed"||compareVersions(install.modVersion,latest)<0);
         const unsigned mapUpdates=selectedMapUpdateCount(ui,install);
-        if((!plan.empty()||mapUpdates)&&confirmAction(ui,installPreferences.languageInstallPending?"Language installation unfinished":"Unbound update available",
+        if(shouldOpenQuickUpdates(install,installPreferences,releases,mapUpdates,installSettingsLoaded,contentUpdatesAllowed,repairNeeded()))reviewInstallOnStartup=true;
+        else if((!plan.empty()||mapUpdates)&&confirmAction(ui,installPreferences.languageInstallPending?"Language installation unfinished":"Unbound installation available",
             "Installed: "+install.modVersion+"\nNewest: "+latest+"\nDestination: "+deviceName(install.update.device)+
             "\nLanguage: "+install.languageFolder+"\n"+planDescription(plan)+
             "\nSelected map packs to update: "+std::to_string(mapUpdates)+
@@ -1692,8 +1719,9 @@ int main(){
         screen=Screen::LocalMods;redraw=true;
     };
     if(reviewInstallOnStartup){
-        const auto result=runInstallMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
+        const auto result=openContentMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
         if(result==InstallMenuResult::Exit)exitRequested=true;
+        availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
         dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1);
     }
     const auto switchGame=[&](Game game){
@@ -1711,6 +1739,13 @@ int main(){
             waitModal(ui,"Game notices",startupNotices,startupNeedsAttention);
         screen=Screen::Home;
         dashboard.returnToMenu(0);
+        if(shouldOpenQuickUpdates(install,installPreferences,releases,availableMapUpdates,installSettingsLoaded,contentUpdatesAllowed,repairNeeded())){
+            networkFeed.pause();
+            const auto result=openContentMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
+            if(result==InstallMenuResult::Exit)exitRequested=true;
+            availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
+            dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1);
+        }
         redraw=true;
     };
     while(WHBProcIsRunning()&&!launchRequested&&!exitRequested){
@@ -1769,8 +1804,9 @@ int main(){
                 if(dashboard.menuFocused()&&homeAction==0){dashboard.enterContent();redraw=true;}
                 else if(!dashboard.menuFocused()&&homeAction==0){screen=Screen::News;newsTouchScroll.reset();newsScroll=0;newsScrollTarget=0;redraw=true;}
                 else if(homeAction==1){
-                    const auto result=runInstallMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
+                    const auto result=openContentMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
                     if(result==InstallMenuResult::Exit)exitRequested=true;
+                    availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
                     dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1);redraw=true;
                 }
                 else if(homeAction==2){
@@ -1884,7 +1920,7 @@ int main(){
                             }else{
                                 const bool adopt=!adoptionRequired||confirmAction(ui,"Replace existing console folder?","A same-named console folder already exists but is not safely owned by HQ. HQ preserves the existing folder before replacing it. The SD source remains unchanged.","REPLACE FOLDER");
                                 if(adopt){
-                                    ProgressCallback copyProgress=[&ui,&item](const std::string&,const std::string& detail,int percent){ui.loading("Copying "+item.sd.name+" to console",detail,percent);};
+                                    ProgressCallback copyProgress=[&ui,&item](const std::string&,const std::string& detail,int percent){ui.installLoading("Copying "+item.sd.name+" to console",detail,percent);};
                                     if(copySdModToGame(install,item.sd,error,adoptionRequired,copyProgress))
                                         notice=item.sd.name+" was copied to "+(install.update.device==Device::USB?"USB":"internal storage")+(sdLoaded?". The SD copy takes priority.":".");
                                     else waitModal(ui,"Copy failed",error,true);
@@ -1935,7 +1971,7 @@ int main(){
                 if((b&button::Up)&&selected>0){--selected;redraw=true;}
                 const int itemTop=234+int(selected)*142-catalogScrollTarget;
                 if(itemTop>510)catalogScrollTarget=std::min(pluginCatalogMaximumScroll(pluginRuntimes.size()),catalogScrollTarget+itemTop-510);
-                if(itemTop<130)catalogScrollTarget=std::max(0,catalogScrollTarget-(130-itemTop));
+                if(itemTop<234)catalogScrollTarget=std::max(0,catalogScrollTarget-(234-itemTop));
                 if(b&button::X){
                     const std::string selectedKey=pluginRuntimes[selected].plugin.key;
                     std::vector<PluginRuntime> refreshed;
@@ -1951,7 +1987,7 @@ int main(){
                         if(refreshedTop>510)
                             catalogScroll=std::min(pluginCatalogMaximumScroll(pluginRuntimes.size()),
                                                    catalogScroll+refreshedTop-510);
-                        if(refreshedTop<130)catalogScroll=std::max(0,catalogScroll-(130-refreshedTop));
+                        if(refreshedTop<234)catalogScroll=std::max(0,catalogScroll-(234-refreshedTop));
                         catalogScrollTarget=catalogScroll;
                         catalogNotice=refreshStatus;
                     }else catalogNotice=refreshStatus.empty()?"Catalog refresh failed; saved listings were kept.":refreshStatus;
@@ -2039,7 +2075,7 @@ int main(){
             const int activeSection=screen==Screen::Network?5:screen==Screen::LocalMods?3:(screen==Screen::Support?4:
                 ((screen==Screen::Catalog||screen==Screen::Details)?2:0));
             ui.setNavigation(screen==Screen::Home?dashboard.section():activeSection,screen==Screen::Home&&dashboard.menuFocused());
-            if(screen==Screen::Home)ui.home(install,release,changes,dashboard.menuFocused()?-1:dashboard.action(),updateStatus,repairNeeded(),pluginRestartRequired,dashboard.gameChoice());
+            if(screen==Screen::Home)ui.home(install,release,changes,dashboard.menuFocused()?-1:dashboard.action(),updateStatus,repairNeeded(),pluginRestartRequired,dashboard.gameChoice(),availableMapUpdates);
             else if(screen==Screen::Network)ui.network();
             else if(screen==Screen::News)ui.news(changes,newsScroll);
             else if(screen==Screen::Support)ui.support(supportReport.text,supportScroll,supportNotice);

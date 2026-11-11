@@ -3,6 +3,13 @@
 #include <iostream>
 using namespace unbound;
 int main(){
+    assert(mapPackSelected("", "new-pack"));
+    assert(mapPackSelected("pack-1|0\n", "new-pack"));
+    assert(!mapPackSelected("pack-1|0\n", "pack-1"));
+    assert(mapPackSelected("pack-1|1\n", "pack-1"));
+    assert(!mapPackSelected("pack-1|1\npack-1|0\n", "pack-1"));
+    assert(mapPackSelected("pack-1|invalid\n", "pack-1"));
+
     assert(nativeSdCoreVersion("#CORE_SD|1.0.0\n")=="1.0.0");
     assert(nativeSdCoreVersion("#CORE_SD|1.0.0\n#CORE_SD|2.0.0\n").empty());
     assert(nativeSdCoreVersion("#CORE_SD|broken\n").empty());

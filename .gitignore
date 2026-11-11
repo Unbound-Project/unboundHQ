@@ -18,3 +18,4 @@ __pycache__/
 /tools/unbound_packager/build/
 /tools/unbound_packager/dist/
 /r2-test/
+/.package-content/

@@ -13,13 +13,13 @@ inline constexpr const char* AppVersion = "1.0.0-sd-test1";
 #else
 inline constexpr bool DiagnosticSdBuild = false;
 inline constexpr const char* AppName = "Unbound HQ";
-inline constexpr const char* AppVersion = "1.0.0";
+inline constexpr const char* AppVersion = "1.0.2";
 #define UNBOUND_HQ_SD_ROOT "fs:/vol/external01/wiiu/apps/Unbound-HQ"
 #define UNBOUND_HQ_WUHB_NAME "Unbound-HQ.wuhb"
 #endif
 // Monotonic integer used only by the HQ self-updater. Increment it for every
 // published WUHB, even when the display version is a beta or hotfix label.
-inline constexpr unsigned long long AppReleaseRevision = 56;
+inline constexpr unsigned long long AppReleaseRevision = 60;
 
 // Replace YOUR_GITHUB_NAME and the repository name with your public distribution repository.
 // See server-example/README.md for the recommended GitHub repository and Release layout.

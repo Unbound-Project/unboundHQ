@@ -13,6 +13,7 @@ using ProgressCallback = std::function<void(const std::string&, const std::strin
 
 bool initializePlatform(std::string& error, const ProgressCallback& progress = {});
 void shutdownPlatform();
+void setOperationFrameCallback(std::function<void()> callback);
 enum class AppPathMigration { Unchanged, Migrated, Failed };
 AppPathMigration migrateApplicationPath(std::string& error);
 

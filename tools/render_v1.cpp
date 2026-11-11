@@ -64,63 +64,145 @@ bool screenshot(const std::filesystem::path& path) {
 
 int main(int argc,char** argv){
  if(argc!=2)return 2;
- std::filesystem::create_directories(argv[1]);
- SDL_setenv("SDL_VIDEODRIVER","dummy",1);SDL_SetHint(SDL_HINT_RENDER_DRIVER,"software");
- unbound::Ui ui;std::string error;if(!ui.initialize(error)){std::cerr<<error;return 1;}
- auto active=fixtureInstall(&unbound::SupportedSkus[0],unbound::Device::USB,unbound::Device::Disc,"english");
- active.modVersion="1.0.0";
- const std::vector<unbound::MapPack> releasePacks{
-     {"pack-1","Unbound DLC Pack 1","Adds Downhill, Hydro, Mirage, and Grind for Multiplayer, plus Die Rise and Nuketown Zombies.",10,
-      {"UNIVERSAL",unbound::ReleaseKind::Full,"-","1.0.0","","",1366100485},{}}
+ const std::filesystem::path output=argv[1];
+ std::filesystem::create_directories(output);
+ SDL_setenv("SDL_VIDEODRIVER","dummy",1);SDL_setenv("SDL_AUDIODRIVER","dummy",1);
+ SDL_SetHint(SDL_HINT_RENDER_DRIVER,"software");
+ Ui ui;std::string error;if(!ui.initialize(error)){std::cerr<<error;return 1;}
+ const auto capture=[&](const std::string& name){return screenshot(output/(name+".png"));};
+ const auto tap=[&](int x,int y,TouchActionKind kind,int value){
+     ui.touchAction({true,false,0,0});ui.touchAction({true,true,x,y});
+     const auto action=ui.touchAction({true,false,x,y});
+     return action&&action->kind==kind&&action->value==value;
  };
- ui.setNavigation(1,false);
- ui.mapPacks(releasePacks,{true},{""},0,active,"Unchecking a pack keeps its files and pauses future updates.");
- if(!screenshot(std::filesystem::path(argv[1])/"dlc-map-pack-picker.png"))return 1;
- const auto nand=fixtureInstall(&unbound::SupportedSkus[0],unbound::Device::MLC,unbound::Device::Disc,"english");
- ui.mapPacks(releasePacks,{true},{""},0,nand,"Unchecking a pack keeps its files and pauses future updates.");
- if(!screenshot(std::filesystem::path(argv[1])/"dlc-map-pack-picker-nand.png"))return 1;
- std::vector<unbound::MapPack> packs(5);
- for(int i=0;i<5;++i){packs[i].id="pack-"+std::to_string(i+1);packs[i].name="Unbound DLC Pack "+std::to_string(i+1);packs[i].description="Optional maps for Multiplayer and Zombies. Keep this pack up to date independently of Core.";packs[i].full.version="1.0.0";packs[i].full.compressedBytes=620*1024*1024;}
- ui.setNavigation(1,false);
- ui.mapPacks(packs,{true,false,false,false,false},{"","","","",""},0,active,"Select the maps you want. Installed files stay when unchecked.");
- if(!screenshot(std::filesystem::path(argv[1])/"choose-packs.png"))return 1;
- ui.touchAction({true,false,0,0});ui.touchAction({true,true,400,340});auto tap=ui.touchAction({true,false,400,340});
- if(!tap||tap->kind!=unbound::TouchActionKind::MapPackRow||tap->value!=0)return 3;
- ui.touchAction({true,true,900,520});tap=ui.touchAction({true,false,900,520});
- if(!tap||tap->kind!=unbound::TouchActionKind::MapPackDetails||tap->value!=0)return 6;
- ui.touchAction({true,true,400,625});tap=ui.touchAction({true,false,400,625});
- if(!tap||tap->kind!=unbound::TouchActionKind::MapPackRow||tap->value!=5)return 7;
- ui.touchAction({true,true,900,625});tap=ui.touchAction({true,false,900,625});
- if(!tap||tap->kind!=unbound::TouchActionKind::Button||tap->value!=int(unbound::button::X))return 4;
-
- ui.mapPacks(packs,{true,false,false,false,true},{"1.0.0","","","",""},4,active,"SD packages are verified before installation.");
- if(!screenshot(std::filesystem::path(argv[1])/"choose-packs-scrolled.png"))return 1;
- ui.mapPacks({}, {}, {},0,active,"Map catalog offline. Core can still be installed.");
- if(!screenshot(std::filesystem::path(argv[1])/"catalog-offline.png"))return 1;
- ui.contentQueue({{"Unbound Core 1.0.0","180 MiB / USB storage"},{"Unbound DLC Pack 1 1.0.0","620 MiB / USB storage"}},active,"800 MiB",0);
- if(!screenshot(std::filesystem::path(argv[1])/"review-install.png"))return 1;
- ui.touchAction({true,false,0,0});ui.touchAction({true,true,400,615});tap=ui.touchAction({true,false,400,615});
- if(!tap||tap->kind!=unbound::TouchActionKind::Button||tap->value!=int(unbound::button::A))return 5;
- std::cout<<"Actual UI map selection, reinstall and start touch targets passed\n";
-
- for(const auto game : {unbound::Game::BlackOpsII,unbound::Game::Ghosts}){
-     unbound::config::activeGame=game;
-     const auto& sku=unbound::gameSkus(game).front();
-     const auto gameInstall=fixtureInstall(&sku,unbound::Device::USB,unbound::Device::Disc,"english");
-     const bool ghosts=game==unbound::Game::Ghosts;
+ auto active=fixtureInstall(&SupportedSkus[0],Device::USB,Device::Disc,"english");
+ active.modVersion="1.0.0";
+ Release latest{"UNIVERSAL",ReleaseKind::Full,"-","1.0.2","","",440401920};
+ NetworkStats stats;stats.available=true;stats.players=187;stats.servers=24;stats.unique=4000;
+ ui.setNetwork(stats,0,0);
+ for(const auto game:{Game::BlackOpsII,Game::Ghosts}){
+     config::activeGame=game;
+     auto install=fixtureInstall(&gameSkus(game).front(),Device::USB,Device::Disc,"english");
+     install.modVersion="1.0.0";
      ui.setNavigation(0,false);
-     ui.home(gameInstall,nullptr,"",0,"",false,false);
-     if(!screenshot(std::filesystem::path(argv[1])/(ghosts?"hq-ghosts.png":"hq-bo2.png")))return 9;
-     ui.touchAction({true,false,0,0});
-     const int otherGameX=ghosts?660:830;
-     ui.touchAction({true,true,otherGameX,51});
-     const auto gameTap=ui.touchAction({true,false,otherGameX,51});
-     if(!gameTap||gameTap->kind!=unbound::TouchActionKind::GameChoice||gameTap->value!=(ghosts?0:1))return 10;
+     ui.home(install,&latest,"# Unbound V1.0 + Ghosts UNC\n\nMore maps, new modes, and a new way to play online.\n",4,"",false,false);
+     if(!capture(game==Game::Ghosts?"home-ghosts":"home-bo2"))return 3;
+     const bool ghosts=game==Game::Ghosts;
+     if(!tap(ghosts?350:560,51,TouchActionKind::GameChoice,ghosts?0:1))return 4;
  }
- std::cout<<"Both game dashboard switch targets passed\n";
- ui.loading("Downloading Ghosts Core","Receiving package",42,false);
- if(!screenshot(std::filesystem::path(argv[1])/"ghosts-download.png"))return 11;
- ui.modal("Install complete","Your Ghosts update is ready.",false,"OK");
- if(!screenshot(std::filesystem::path(argv[1])/"ghosts-dialog.png"))return 12;
- ui.shutdown();return 0;
+ config::activeGame=Game::BlackOpsII;
+ ui.setNavigation(1,false);
+ ui.installReview(active,"1.0.2","",3,true,false,false,true,true);
+ if(!capture("install-review")||!tap(1050,570,TouchActionKind::InstallRow,3)||!tap(400,620,TouchActionKind::InstallRow,5))return 5;
+ ui.installMenu(active,{{active,{"english","french"}}},{},0,"1.0.2","",true,true,true);
+ if(!capture("install-settings")||!tap(814,300,TouchActionKind::InstallChoice,1))return 6;
+ ui.installReview(active,"1.0.2","Update ZIP found on your SD card.",3,true,true,false,true);
+ if(!capture("install-from-sd"))return 7;
+ const MapPack pack{"pack-1","Unbound DLC Pack 1","Adds Downhill, Hydro, Mirage, and Grind for Multiplayer, plus Die Rise and Nuketown Zombies.",10,
+     {"UNIVERSAL",ReleaseKind::Full,"-","1.0.0","","",1366100485},{}};
+ std::vector<MapPack> packs{pack};
+ ui.mapPacks(packs,{true},{""},0,active,"Unchecked packs keep their installed files.");
+ if(!capture("map-packs")||!tap(400,400,TouchActionKind::MapPackRow,0)||
+    !tap(1000,555,TouchActionKind::MapPackDetails,0)||
+    !tap(1050,620,TouchActionKind::MapPackRow,1)||
+    !tap(450,620,TouchActionKind::MapPackRow,2))return 8;
+ packs.resize(32,pack);std::vector<bool> chosen(32,false);chosen[31]=true;
+ std::vector<std::string> versions(32,"1.0.0");
+ for(int i=0;i<32;++i){packs[i].name="DLC Pack "+std::to_string(i+1);packs[i].id=std::to_string(i);}
+ ui.mapPacks(packs,chosen,versions,31,active,"Selection is saved for next time.");
+ if(!capture("map-packs-scrolled")||!tap(400,520,TouchActionKind::MapPackRow,31))return 9;
+ auto nand=active;nand.update.device=Device::MLC;
+ ui.mapPacks({pack},{true},{"1.0.0"},1,nand,"Install destination: internal storage.");
+ if(!capture("map-packs-nand"))return 10;
+ ui.mapPacks({pack},{true},{"1.0.0"},2,active,"Core is left unchanged. Reinstall the selected map packs.",true);
+ if(!capture("map-packs-reinstall")||!tap(450,620,TouchActionKind::MapPackRow,2))return 25;
+ ui.mapPacks({}, {}, {},0,active,"Map catalog offline. Core is still available.");
+ if(!capture("map-packs-offline"))return 11;
+ ui.contentQueue({{"Unbound Core 1.0.2","420 MiB / USB storage"},{"Unbound DLC Pack 1 1.0.0","1.27 GiB / USB storage"}},active,"1.68 GiB",0);
+ if(!capture("content-queue")||!tap(1050,615,TouchActionKind::Button,int(button::A)))return 12;
+ std::vector<WorkshopPlugin> plugins{
+     {"UNBOUND_MOD_LINK","Mod Load Plugin","Unbound","Loads your installed Unbound mods and keeps required files ready for the game.","","",{"wiiu/environments/aroma/plugins/modload.wps"}},
+     {"GAMEPAD_MIC_REDIRECT","GamePad Plugin","Community","Use the Wii U GamePad microphone in supported games.","","",{}},
+     {"PROTARIUM","Protarium Plugin","Protarium Network","An alternative network for the original online experience.","","",{}}
+ };
+ PluginInstallStatus installed;installed.presence=PluginPresence::Managed;installed.installedVersion="1.0.0";installed.installedRevision=1;
+ ui.setNavigation(2,false);
+ ui.pluginCatalog(plugins,{installed,{},{}},{true,true,true},0,0,"",{true,true,true});
+ if(!capture("workshop")||!tap(1050,580,TouchActionKind::PluginRow,0))return 13;
+ PluginRelease pluginRelease;pluginRelease.version="1.0.1";pluginRelease.revision=2;
+ ui.pluginDetails(plugins[0],&pluginRelease,installed,true,0,0,"","Release check complete.");
+ if(!capture("plugin-details"))return 14;
+ ui.setNavigation(1,false);
+ ui.downloadLoading("Downloading Unbound Core","176 MiB of 420 MiB / 2.1 MiB/s",42,true);
+ if(!ui.waitingGameActive()||!capture("download-fullscreen"))return 15;
+#ifdef HQ_LAYOUT_PREVIEW
+ ui.waitingGameInput(0,0,{true,true,640,690});
+ ui.waitingGamePreviewFrame(SDL_GetTicks()+33);
+ if(!ui.waitingGamePreviewState().ducking()||!capture("supply-run-touch-duck"))return 32;
+ ui.waitingGameInput(0,0,{true,false,640,690});
+ if(ui.waitingGamePreviewState().ducking())return 33;
+#endif
+ if(!tap(500,490,TouchActionKind::Button,int(button::A)))return 16;
+ ui.waitingGameInput(button::A);
+ SDL_Delay(100);ui.animateDownloadWaiting();
+ if(!capture("supply-run-jump"))return 17;
+#ifdef HQ_LAYOUT_PREVIEW
+ std::array<bool,SupplyRun::Obstacles.size()> captured{};
+ bool duckGull=false,duckPlane=false;
+ std::uint32_t virtualTime=SDL_GetTicks();
+ for(unsigned frame=0;frame<7200;++frame){
+     const auto& game=ui.waitingGamePreviewState();
+     const SupplyRun::Obstacle* incoming=nullptr;
+     for(const auto& obstacle:game.obstacles()){
+         if(obstacle.x+SupplyRun::Obstacles[obstacle.kind].width<SupplyRun::PlayerX)continue;
+         if(!incoming||obstacle.x<incoming->x)incoming=&obstacle;
+     }
+     const bool duck=incoming&&SupplyRun::overhead(incoming->kind)&&incoming->x<265;
+     ui.waitingGameInput(0,duck?button::Down:0);
+     if(incoming&&!SupplyRun::overhead(incoming->kind)&&incoming->x>SupplyRun::PlayerX&&incoming->x<240&&game.height()==0)ui.waitingGameInput(button::A);
+     ui.waitingGamePreviewFrame(virtualTime+=33);
+     if(game.crashed())return 22;
+     const SupplyRun::Obstacle* next=nullptr;
+     for(const auto& obstacle:game.obstacles()){
+         if(obstacle.x+SupplyRun::Obstacles[obstacle.kind].width<SupplyRun::PlayerX)continue;
+         if(!next||obstacle.x<next->x)next=&obstacle;
+     }
+     if(next&&next->kind>=3&&!captured[next->kind]&&next->x<650&&next->x>420){
+         captured[next->kind]=true;
+         if(!capture("easter-egg-"+std::to_string(next->kind)))return 23;
+     }
+     if(next&&game.ducking()&&next->x>120&&next->x<160){
+         if(next->kind==3&&!duckGull){duckGull=true;if(!capture("supply-run-duck-seagull"))return 30;}
+         if(next->kind==7&&!duckPlane){duckPlane=true;if(!capture("supply-run-duck-plane"))return 31;}
+     }
+     if(captured[3]&&captured[4]&&captured[5]&&captured[6]&&captured[7]&&captured[8]&&duckGull&&duckPlane)break;
+ }
+ if(!captured[3]||!captured[4]||!captured[5]||!captured[6]||!captured[7]||!captured[8]||!duckGull||!duckPlane)return 24;
+#endif
+ // The sidebar/game-toggle locations have no navigation routes during work.
+ for(const auto& point:{std::pair{100,160},std::pair{560,51}}){
+     ui.touchAction({true,true,point.first,point.second});
+     if(ui.touchAction({true,false,point.first,point.second}))return 18;
+ }
+ ui.installLoading("Installing Unbound Core","Copying verified files",74);
+ if(!capture("install-fullscreen"))return 19;
+ // Noncancellable installation never exposes a Back/Exit touch control.
+ ui.touchAction({true,true,1100,690});
+ const auto safe=ui.touchAction({true,false,1100,690});
+ if(safe&&safe->kind==TouchActionKind::Button&&(safe->value&int(button::B|button::Plus)))return 20;
+ // A normal loading sequence must immediately stop the runner, even if its
+ // title contains words such as package, download or install.
+ for(const char* title:{"Loading Unbound HQ","Checking map packs","Checking saved package","Loading install settings"}){
+     ui.loading(title,"Preparing the requested screen...",40,false);
+     if(ui.waitingGameActive())return 26;
+ }
+ if(!capture("normal-loading-centered"))return 27;
+ if(tap(500,490,TouchActionKind::Button,int(button::A)))return 28;
+ ui.loading("Checking saved package","Verifying the saved ZIP before use.",40,true,"Cancel verification");
+ if(ui.waitingGameActive()||!tap(640,690,TouchActionKind::Button,int(button::B)))return 29;
+ ui.modal("Install complete","Your update is ready. Restart your console to load the updated plugins.",false,"OK");
+ if(ui.waitingGameActive()||!capture("dialog"))return 21;
+ ui.shutdown();
+ std::cout<<"Actual UI screenshots and touch routes passed, including fullscreen installation isolation\n";
+ return 0;
 }

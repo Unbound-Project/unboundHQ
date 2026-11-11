@@ -6,7 +6,8 @@
 #include "network_globe.hpp"
 #include "touch.hpp"
 #include "background_music.hpp"
-#include "download_animation_assets.hpp"
+#include "supply_run.hpp"
+#include "quick_update.hpp"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <array>
@@ -23,12 +24,15 @@ class Ui {
 public:
 #ifdef HQ_LAYOUT_PREVIEW
     void installLayoutPreview(int option);
+    const SupplyRun& waitingGamePreviewState() const { return supplyRun_; }
+    void waitingGamePreviewFrame(std::uint32_t now) { renderWaitingGameFrame(now); }
 #endif
     static constexpr int NavigationRailWidth = 226;
     static constexpr int ContentLeft = NavigationRailWidth + 18;
     static constexpr int ContentRight = 1252;
     static constexpr int LocalModListTop = 225;
     static constexpr int LocalModRowHeight = 82;
+    static constexpr SDL_Rect ContentQueueViewport{244,266,606,292};
     static constexpr int PluginCatalogListTop = 234;
     static constexpr int PluginCatalogRowHeight = 142;
     bool initialize(std::string& error);
@@ -48,23 +52,31 @@ public:
     void prepareNews(const std::string& changes);
     void loading(const std::string& title, const std::string& detail, int progress = -1,
                  bool cancellable = false, const char* cancelLabel = "Cancel download");
+    // Only real transfer/install callers opt into the waiting game.
+    void downloadLoading(const std::string& title, const std::string& detail, int progress = -1,
+                         bool cancellable = true, const char* cancelLabel = "Cancel download");
+    void installLoading(const std::string& title, const std::string& detail, int progress = -1);
     // Called by the main-thread download wait loop, independently of transfer
-    // callbacks. Reuses a static screen texture and predecoded sprite sheets.
+    // callbacks. Reuses a static screen texture and a small code-defined pixel atlas.
     void animateDownloadWaiting();
+    bool waitingGameActive() const { return downloadAnimationActive_; }
+    void waitingGameInput(std::uint32_t buttons, std::uint32_t held = 0, TouchSample touch = {});
     int modal(const std::string& title, const std::string& body, bool isError = false,
               const std::string& actionLabel = "CONTINUE", int scrollOffset = 0,
               bool confirm = false);
     void home(const GameInstall& install, const Release* release, const std::string& changes,
               int selectedAction, const std::string& updateStatus,
-              bool repairNeeded = false, bool restartRequired = false, int gameChoice = -1);
+              bool repairNeeded = false, bool restartRequired = false, int gameChoice = -1, unsigned mapUpdates = 0);
     void installMenu(const GameInstall& active, const std::vector<InstallOption>& options,
                      const InstallPreferences& draft, int selectedRow,
                      const std::string& latest, const std::string& notice,
                      bool contentAllowed, bool hasUpdatePlan, bool reinstallAvailable,
                      bool inheritedRepairNeeded = false);
+    void quickUpdate(const GameInstall& install, const std::vector<QuickUpdateRow>& rows,
+                     bool coreCurrent = false, int scroll = 0);
     void installReview(const GameInstall& active, const std::string& latest,
                        const std::string& notice, int selected, bool enabled,
-                       bool sdAvailable, bool repair, bool update);
+                       bool sdAvailable, bool repair, bool update, bool mapsAvailable = false);
     void contentQueue(const std::vector<std::pair<std::string,std::string>>& rows,
                       const GameInstall& install, const std::string& total, int scroll);
     void mapPacks(const std::vector<MapPack>& packs, const std::vector<bool>& selected,
@@ -139,13 +151,12 @@ private:
     SDL_Texture* logo_ = nullptr;
     SDL_Texture* squareLogo_ = nullptr;
     SDL_Texture* newsHero_ = nullptr; // borrowed from newsImages_, never separately destroyed
-    std::array<SDL_Texture*,download_animation::assets::Atlases.size()> downloadAtlases_{};
-    std::array<bool,download_animation::assets::Clips.size()> downloadClipsReady_{};
+    SDL_Texture* waitingAtlas_ = nullptr;
+    SupplyRun supplyRun_;
+    TouchRect waitingDuckTouch_{};
     SDL_Texture* downloadScreenCache_ = nullptr;
     bool downloadAnimationActive_ = false;
-    std::uint32_t downloadAnimationStarted_ = 0;
     std::uint32_t downloadAnimationLastDraw_ = 0;
-    int downloadAnimationTop_ = 0;
     // Licensed Lucide PNGs, loaded once and tinted. Supersampled procedural
     // fallbacks keep navigation usable if an optional asset is unavailable.
     std::array<SDL_Texture*,11> navigationIcons_{};
@@ -187,15 +198,21 @@ private:
     TTF_Font* bold38_ = nullptr;
 
     void backdrop();
-    void loadDownloadAnimations();
-    void drawDownloadAnimations(std::uint32_t now);
+    void drawLoading(const std::string& title, const std::string& detail, int progress,
+                     bool cancellable, const char* cancelLabel, bool miniGame);
+    void loadWaitingGame();
+    void drawWaitingGame(std::uint32_t now);
+    void renderWaitingGameFrame(std::uint32_t now);
     void beginTouch(const std::string& identity);
     void touchTarget(SDL_Rect rect, TouchActionKind kind, int value,
                      const SDL_Rect* clip = nullptr);
     void header(const std::string& section, bool gameSwitchEnabled=false, int gameChoice=-1);
-    void navigationRail(int activeSection);
+    void navigationRail(int activeSection, bool interactive = true);
     void installSteps(int current);
     void directionIcon(SDL_Rect rect, std::uint32_t direction, SDL_Color color);
+    void checkmark(SDL_Rect rect, SDL_Color color);
+    void primaryAction(SDL_Rect rect, const std::string& label, bool focused, bool enabled = true);
+    void artworkCover(SDL_Texture* texture, SDL_Rect rect);
     void footer(const std::vector<std::pair<std::string,std::string>>& actions,
                 bool subdued = true);
     void text(TTF_Font* font, const std::string& value, int x, int y, SDL_Color color,

@@ -1,5 +1,5 @@
 // Included inside main.cpp's application namespace, after the Core installer.
-struct MapJob { std::string id,name; Release release; };
+using MapJob = QuickMapUpdate;
 std::string mapPendingPath(){return std::string(config::gameStateRoot())+"/maps/pending.txt";}
 
 bool readMapPending(const GameInstall& install,std::vector<MapJob>& jobs,std::string& error){
@@ -64,20 +64,18 @@ std::string installedMapVersion(const GameInstall& install,const std::string& ma
 unsigned selectedMapUpdateCount(Ui& ui,const GameInstall& install){
     if(!mapPackTargetReady(install))return 0;
     std::string preferences,marker,error;
-    if(!readInstallState(std::string(config::gameStateRoot())+"/maps/selection.txt",preferences,error)||preferences.find("|1")==std::string::npos)return 0;
+    if(!readInstallState(std::string(config::gameStateRoot())+"/maps/selection.txt",preferences,error))return 0;
     if(!readInstallState(install.update.root+"/"+config::VersionRelativePath,marker,error))return 0;
     loadMapCatalog(ui);unsigned count=0;
     for(const auto& pack:sessionMapCatalog){
-        std::istringstream lines(preferences);std::string line;bool selected=false;
-        while(std::getline(lines,line)){auto f=packFields(trim(line));if(f.size()==2&&f[0]==pack.id&&f[1]=="1")selected=true;}
-        if(!selected)continue;
+        if(!mapPackSelected(preferences,pack.id))continue;
         auto version=installedMapVersion(install,marker,pack.id,error);
         if(mapPackRelease(pack,version))++count;
     }
     return count;
 }
 
-bool chooseMapPacks(Ui& ui,const GameInstall& install,std::vector<MapJob>& jobs){
+bool chooseMapPacks(Ui& ui,const GameInstall& install,std::vector<MapJob>& jobs,bool reinstallSelected=false){
     TouchBoundary boundary(ui);jobs.clear();std::string error;
     if(!readMapPending(install,jobs,error)){waitModal(ui,"Map installation needs attention",error,true);return false;}
     if(!jobs.empty())return confirmAction(ui,"Resume map installation?",
@@ -97,11 +95,9 @@ bool chooseMapPacks(Ui& ui,const GameInstall& install,std::vector<MapJob>& jobs)
         auto v=installedMapVersion(install,marker,p.id,error);
         if(!error.empty()){waitModal(ui,"Could not read pack record",error,true);return false;}
         versions.push_back(v);
-        bool enabled=!v.empty();std::istringstream pref(preferences);std::string line;
-        while(std::getline(pref,line)){auto f=packFields(trim(line));if(f.size()==2&&f[0]==p.id)enabled=f[1]=="1";}
-        selected.push_back(enabled);
+        selected.push_back(mapPackSelected(preferences,p.id));
     }
-    int focused=0;bool redraw=true,reinstall=false;NavigationRepeat repeat;
+    int focused=0;bool redraw=true,reinstall=reinstallSelected;NavigationRepeat repeat;
     while(WHBProcIsRunning()){
         if(redraw){ui.mapPacks(packs,selected,versions,focused,install,warning.empty()?"Unchecking a pack keeps its files and pauses future updates.":warning,reinstall);redraw=false;}
         std::optional<TouchAction> touch;const auto input=readUiInput(ui,&touch);
@@ -114,10 +110,12 @@ bool chooseMapPacks(Ui& ui,const GameInstall& install,std::vector<MapJob>& jobs)
         }
         if(b&(button::B|button::Plus))return false;
         if(b&button::X){reinstall=!reinstall;redraw=true;}
-        if(b&button::Up){focused=(focused+int(packs.size()))%(int(packs.size())+1);redraw=true;}
-        if(b&button::Down){focused=(focused+1)%(int(packs.size())+1);redraw=true;}
+        const int focusCount=int(packs.size())+(packs.empty()?1:2);
+        if(b&button::Up){focused=(focused+focusCount-1)%focusCount;redraw=true;}
+        if(b&button::Down){focused=(focused+1)%focusCount;redraw=true;}
         if(b&button::A){
             if(focused<int(packs.size())){selected[focused]=!selected[focused];redraw=true;}
+            else if(focused==int(packs.size())+1){reinstall=!reinstall;redraw=true;}
             else{
                 std::string choice;
                 for(std::size_t i=0;i<packs.size();++i){
@@ -137,7 +135,7 @@ bool chooseMapPacks(Ui& ui,const GameInstall& install,std::vector<MapJob>& jobs)
 
 bool confirmContentQueue(Ui& ui,const GameInstall& install,const std::vector<const Release*>& core,const std::vector<MapJob>& maps){
     TouchBoundary boundary(ui);std::vector<std::pair<std::string,std::string>> rows;std::uint64_t bytes=0;
-    if(core.empty())rows.push_back({"Unbound Core","Up to date"});
+    if(core.empty())rows.push_back({"Unbound Core","Unchanged / not queued"});
     for(const auto* r:core){rows.push_back({"Unbound Core "+r->version,packageBytes(r->compressedBytes)+" / "+deviceName(install.update.device)});bytes+=r->compressedBytes;}
     for(const auto& job:maps){rows.push_back({job.name+" "+job.release.version,packageBytes(job.release.compressedBytes)+" / "+deviceName(install.update.device)});bytes+=job.release.compressedBytes;}
     int scroll=0;bool redraw=true;TouchScroll swipe;
@@ -145,7 +143,7 @@ bool confirmContentQueue(Ui& ui,const GameInstall& install,const std::vector<con
         if(redraw){ui.contentQueue(rows,install,packageBytes(bytes),scroll);redraw=false;}
         const auto input=readUiInput(ui);
         if(input.buttons||input.held)swipe.reset();
-        else if(swipe.update(input.touch,SDL_GetTicks(),std::max(0,int(rows.size())*80-290),scroll,{244,212,606,342})){
+        else if(swipe.update(input.touch,SDL_GetTicks(),std::max(0,int(rows.size())*80-Ui::ContentQueueViewport.h+16),scroll,{Ui::ContentQueueViewport.x,Ui::ContentQueueViewport.y,Ui::ContentQueueViewport.w,Ui::ContentQueueViewport.h})){
             ui.cancelTouchGesture();redraw=true;
         }
         if(input.buttons&button::A)return true;
@@ -153,13 +151,13 @@ bool confirmContentQueue(Ui& ui,const GameInstall& install,const std::vector<con
         int delta=0;
         if(input.buttons&button::Down)delta=80;else if(input.held&button::Down)delta=8;
         if(input.buttons&button::Up)delta=-80;else if(input.held&button::Up)delta=-8;
-        const auto next=std::clamp(scroll+delta,0,std::max(0,int(rows.size())*80-290));
+        const auto next=std::clamp(scroll+delta,0,std::max(0,int(rows.size())*80-Ui::ContentQueueViewport.h+16));
         if(next!=scroll){scroll=next;redraw=true;}waitFrame(ui);
     }
     return false;
 }
 
-bool installMapJobs(Ui& ui,const GameInstall& install,const std::vector<MapJob>& jobs,std::string& error){
+bool installMapJobs(Ui& ui,const GameInstall& install,const std::vector<MapJob>& jobs,std::string& error,bool automaticLocalSource=false){
     if(jobs.empty())return true;
     if(!mapPackTargetReady(install)){error="Reconnect the selected game update storage and retry.";return false;}
     if(install.modVersion.empty()||install.modVersion=="Not installed"||
@@ -172,7 +170,7 @@ bool installMapJobs(Ui& ui,const GameInstall& install,const std::vector<MapJob>&
         const auto cached=archive;
         for(const auto& path:sdPackageCandidates(r.downloadUrl,selectedSdPackageRoot())){
             struct stat st{};if(lstat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode))continue;
-            if(!confirmAction(ui,"Map pack found on SD",job.name+"\n\nVerify and install this ZIP from your SD card? B uses the internet.","USE SD PACKAGE"))break;
+            if(!automaticLocalSource&&!confirmAction(ui,"Map pack found on SD",job.name+"\n\nVerify and install this ZIP from your SD card? B uses the internet.","USE SD PACKAGE"))break;
             DownloadControl control;DownloadInputContext input{ui,control};control.setInputPoll(pollDownloadInput,&input);
             const auto result=checkDownloadedPackage(path,r.sha256,r.compressedBytes,error,
                 [&](const std::string&,const std::string& detail,int percent){ui.loading("Verifying "+job.name,detail,percent,true);},&control);
@@ -189,7 +187,7 @@ bool installMapJobs(Ui& ui,const GameInstall& install,const std::vector<MapJob>&
             if(!writeTextFileAtomic(mapPendingPath(),journal,failure))return false;
             mapRepairPending=true;armed=true;return true;
         };
-        const auto progress=[&](const std::string& stage,const std::string& detail,int percent){ui.loading(stage+": "+job.name,detail,percent);};
+        const auto progress=[&](const std::string& stage,const std::string& detail,int percent){ui.installLoading(stage+": "+job.name,detail,percent);};
         if(!installMapArchive(archive,install,job.id,r.version,error,progress,beforeMutation))return false;
         if(!writeTextFileAtomic(mapPendingPath(),"",error))return false;
         mapRepairPending=false;

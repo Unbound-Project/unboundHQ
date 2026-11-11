@@ -18,12 +18,15 @@ APP_AUTHOR := Black Ops 2 Unbound
 
 # wut_rules evaluates APP_* packaging settings as it is included, so this
 # must be declared before the include below.
-APP_CONTENT := $(TOPDIR)/content
+APP_CONTENT := $(TOPDIR)/.package-content
 APP_ICON := $(TOPDIR)/content/meta/icon.png
 APP_TV_SPLASH := $(TOPDIR)/content/meta/bootTv.png
 APP_DRC_SPLASH := $(TOPDIR)/content/meta/bootDrc.png
 
 include $(DEVKITPRO)/wut/share/wut_rules
+
+# Refresh the package when content changes even if no C++ file was rebuilt.
+WUHB_DEPS += $(shell find $(TOPDIR)/content -type f) $(TOPDIR)/tools/prepare_runtime_content.py
 
 ifeq ($(DIAGNOSTIC_SD),1)
 TARGET      := BO2-Unbound-HQ-SDTest
@@ -64,14 +67,22 @@ export HFILES_BIN := $(addsuffix .h,$(subst .,_,$(BINFILES)))
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
-.PHONY: $(BUILD) clean all test test-curl test-zip
+.PHONY: $(BUILD) clean all test test-curl test-zip runtime-content
 all: $(BUILD)
-$(BUILD):
+runtime-content:
+	@python3 tools/prepare_runtime_content.py
+$(BUILD): runtime-content
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 clean:
 	@rm -fr $(BUILD) $(TARGET).wuhb $(TARGET).rpx $(TARGET).elf
 test:
+	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/quick_update_tests.cpp source/model.cpp -o quick_update_tests
+	@./quick_update_tests
+	@rm -f quick_update_tests
+	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Isource tests/supply_run_tests.cpp -o supply_run_tests
+	@./supply_run_tests
+	@rm -f supply_run_tests
 	@c++ -std=c++20 -Wall -Wextra -Werror -Iinclude -Isource tests/app_path_migration_tests.cpp -o app_path_migration_tests
 	@./app_path_migration_tests
 	@rm -f app_path_migration_tests

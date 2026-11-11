@@ -68,6 +68,7 @@ bool mlcMounted = false;
 bool usbMounted = false;
 bool discSourceMounted[DiscSourceVolumeCount]{};
 bool curlReady = false;
+std::function<void()> operationFrameCallback;
 
 using ByteObserver = std::function<void(std::size_t)>;
 using ModSyncLedger = std::map<std::string, std::string>;
@@ -2102,6 +2103,7 @@ bool extractArchive(const std::string& archive, Mapper mapper, void* context,
         progress(frame.title,frame.detail,frame.percent);
     }}:ProgressCallback{};
     const BackgroundTickCallback pulse=progress?BackgroundTickCallback{[&]{
+        if(operationFrameCallback)operationFrameCallback();
         const auto now=SDL_GetTicks();
         if(activity.pulseDue(now)){
             const auto frame=activity.snapshot(now);
@@ -2565,6 +2567,7 @@ bool runInheritedRepairTask(const GameInstall& install,InheritedContentRepairInf
         const auto view=activity.snapshot(now);progress(view.title,view.detail,view.percent);
     }}:ProgressCallback{};
     const BackgroundTickCallback tick=progress?BackgroundTickCallback{[&]{
+        if(operationFrameCallback)operationFrameCallback();
         const auto now=SDL_GetTicks();if(activity.pulseDue(now)){
             const auto view=activity.snapshot(now);progress(view.title,view.detail,view.percent);
         }
@@ -2724,7 +2727,11 @@ bool initializePlatform(std::string& error, const ProgressCallback& progress) {
     return true;
 }
 
+void setOperationFrameCallback(std::function<void()> callback) {
+    operationFrameCallback=std::move(callback);
+}
 void shutdownPlatform() {
+    operationFrameCallback={};
     for(unsigned volume=0;volume<DiscSourceVolumeCount;++volume){
         if(discSourceMounted[volume])Mocha_UnmountFS(DiscSourceVolumes[volume].alias);
         discSourceMounted[volume]=false;
@@ -3695,6 +3702,7 @@ PackageVerificationStatus checkDownloadedPackage(const std::string& archive,
     }}:ProgressCallback{};
     const BackgroundTickCallback tick=(progress||control)?BackgroundTickCallback{[&]{
         if(control)control->pollInput();
+        else if(operationFrameCallback)operationFrameCallback();
         const auto now=SDL_GetTicks();
         if(progress&&activity.pulseDue(now)){
             const auto frame=activity.snapshot(now);progress(frame.title,frame.detail,frame.percent);
