@@ -100,8 +100,8 @@ This repository owns GamePad Mic Redirect's curated listing and exact destinatio
 `workshop-plugins.txt`. Its developer-owned metadata and project information live at:
 
 ```text
-https://raw.githubusercontent.com/tonytrawl/gamepad_mic_redirect/main/release.txt
-https://github.com/tonytrawl/gamepad_mic_redirect
+https://raw.githubusercontent.com/Unbound-Project/gamepad_mic_redirect/main/release.txt
+https://github.com/Unbound-Project/gamepad_mic_redirect
 ```
 
 Its immutable release archive may contain only:

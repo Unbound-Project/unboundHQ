@@ -64,7 +64,7 @@ constexpr const char* BuiltInPluginCatalog =
     "# UNBOUND_PLUGIN_CATALOG_V1\n"
     "PLUGIN|GAMEPAD_MIC_REDIRECT|GamePad Mic Redirect|Tony (tonytrawl)|Redirects the Wii U GamePad built-in microphone for headset-only voice input. Experimental; v0.4.0 adds mute and push-to-talk controls.|"
     "https://downloads.unc-bo2.fun/release-manifest.txt|"
-    "https://github.com/tonytrawl/gamepad_mic_redirect|"
+    "https://github.com/Unbound-Project/gamepad_mic_redirect|"
     "wiiu/environments/aroma/plugins/GamePadMicRedirect.wps\n"
     "PLUGIN|PROTARIUM|Protarium|Protarium Network|Connect compatible Wii U games to Protarium Network. Installs the paired Inkay Aroma module and plugin. A full console restart is required; Inkay changes network and SSL behavior while active.|"
     "https://downloads.unc-bo2.fun/release-manifest.txt|"

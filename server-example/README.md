@@ -199,7 +199,7 @@ record format is:
 # TYPE|PLUGIN_KEY|NAME|CREATOR|DESCRIPTION|RELEASE_FEED_URL|HOMEPAGE_URL|MANAGED_PATHS
 PLUGIN|PROTARIUM|Protarium|Protarium Network|Connect compatible Wii U games to Protarium Network. Installs the paired Inkay Aroma module and plugin. A full console restart is required; Inkay changes network and SSL behavior while active.|https://raw.githubusercontent.com/Protarium-Network/Inkay-GitHub-Release/main/unbound-plugin-release.txt|https://github.com/Protarium-Network/Inkay-GitHub-Release|wiiu/environments/aroma/modules/Inkay-pretendo.wms,wiiu/environments/aroma/plugins/Inkay-pretendo.wps
 PLUGIN|UNBOUND_MOD_LINK|Unbound Mod Link|Black Ops 2 Unbound|Loads manifested SD mods without copying them into the installed game.|https://raw.githubusercontent.com/OWNER/bo2-unbound/main/releases-chain-v2.txt|https://github.com/OWNER/bo2-unbound|wiiu/environments/aroma/plugins/BO2-Unbound-Redirector.wps
-PLUGIN|GAMEPAD_MIC_REDIRECT|GamePad Mic Redirect|Tony (tonytrawl)|Redirects the Wii U GamePad built-in microphone for headset-only voice input. Experimental; v0.4.0 adds mute and push-to-talk controls.|https://raw.githubusercontent.com/tonytrawl/gamepad_mic_redirect/main/release.txt|https://github.com/tonytrawl/gamepad_mic_redirect|wiiu/environments/aroma/plugins/GamePadMicRedirect.wps
+PLUGIN|GAMEPAD_MIC_REDIRECT|GamePad Mic Redirect|Tony (tonytrawl)|Redirects the Wii U GamePad built-in microphone for headset-only voice input. Experimental; v0.4.0 adds mute and push-to-talk controls.|https://raw.githubusercontent.com/Unbound-Project/gamepad_mic_redirect/main/release.txt|https://github.com/Unbound-Project/gamepad_mic_redirect|wiiu/environments/aroma/plugins/GamePadMicRedirect.wps
 ```
 
 Unbound Mod Link is team-owned and uses the same `releases-chain-v2.txt` response that HQ already
@@ -226,7 +226,7 @@ for those paths, but cannot add another destination. HQ accepts immediate `.wps`
 and wrappers around the expected `wiiu/` root.
 
 GamePad Mic Redirect hosts its own release feed at
-`https://raw.githubusercontent.com/tonytrawl/gamepad_mic_redirect/main/release.txt`; its archive may
+`https://raw.githubusercontent.com/Unbound-Project/gamepad_mic_redirect/main/release.txt`; its archive may
 contain only `wiiu/environments/aroma/plugins/GamePadMicRedirect.wps`. Protarium's active feed is
 `https://raw.githubusercontent.com/Protarium-Network/Inkay-GitHub-Release/main/unbound-plugin-release.txt`.
 Its exact paired paths and publishing contract are documented in
