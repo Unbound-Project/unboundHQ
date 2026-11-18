@@ -1,4 +1,5 @@
 #include "archive_limits.hpp"
+#include "tester_archive.hpp"
 
 #include <cassert>
 #include <cstdint>
@@ -10,7 +11,7 @@ int main() {
     using unbound::ArchiveSizeLimit;
     using unbound::archiveSizeLimit;
     constexpr std::uint64_t GiB = 1024ULL * 1024 * 1024;
-    static_assert(unbound::config::MaxArchiveBytes == 2 * GiB);
+    static_assert(unbound::config::MaxArchiveBytes == 4 * GiB - 1);
     static_assert(unbound::config::MaxArchiveEntryBytes == 2 * GiB);
     static_assert(unbound::config::MaxArchiveExpandedBytes == 5 * GiB);
 
@@ -36,7 +37,7 @@ int main() {
         expanded += entry;
     }
     assert(expanded == 2155548450ULL);
-    assert(expanded > unbound::config::MaxArchiveBytes);
+    assert(expanded > 2 * GiB);
 
     // Five GiB is accepted across ordinary entries, but never a six-GiB total.
     expanded = 0;
@@ -46,5 +47,17 @@ int main() {
     }
     assert(expanded == 5 * GiB);
     assert(archiveSizeLimit(expanded, GiB) == ArchiveSizeLimit::Expanded);
+    // The combined tester exceeds signed 32-bit offsets but fits FAT32.
+    constexpr std::uint64_t combinedZipBytes = 3520339520ULL;
+    constexpr std::uint64_t combinedExpandedBytes = 4755944782ULL;
+    assert(combinedZipBytes > std::uint64_t{std::numeric_limits<std::int32_t>::max()});
+    assert(combinedZipBytes <= unbound::config::MaxArchiveBytes);
+    assert(combinedExpandedBytes <= unbound::config::MaxArchiveExpandedBytes);
+    assert(unbound::testerReadmeEntry("README_TESTER.txt", false, 1138));
+    assert(!unbound::testerReadmeEntry("README_TESTER.txt", true, 0));
+    assert(!unbound::testerReadmeEntry("README_TESTER.txt", false, 65537));
+    assert(!unbound::testerReadmeEntry("update/content/README_TESTER.txt", false, 1138));
+    assert(!unbound::testerReadmeEntry("../README_TESTER.txt", false, 1138));
+    assert(!unbound::testerReadmeEntry("unrelated.txt", false, 1138));
     std::puts("Archive limit tests passed");
 }

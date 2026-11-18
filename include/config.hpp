@@ -19,7 +19,7 @@ inline constexpr const char* AppVersion = "1.0.2";
 #endif
 // Monotonic integer used only by the HQ self-updater. Increment it for every
 // published WUHB, even when the display version is a beta or hotfix label.
-inline constexpr unsigned long long AppReleaseRevision = 60;
+inline constexpr unsigned long long AppReleaseRevision = 61;
 
 // Replace YOUR_GITHUB_NAME and the repository name with your public distribution repository.
 // See server-example/README.md for the recommended GitHub repository and Release layout.
@@ -130,10 +130,10 @@ inline constexpr unsigned long long MaxPluginArchiveBytes = 32ULL * 1024 * 1024;
 inline constexpr unsigned long long MaxPluginExpandedBytes = 64ULL * 1024 * 1024;
 inline constexpr unsigned long long MaxAppUpdateBytes = 64ULL * 1024 * 1024;
 inline constexpr unsigned MaxArchiveFiles = 4096;
-// Keep the SD/download and individual-file ceiling independent of the sum of
-// expanded payload files. A compressed package below 2 GiB can expand beyond it.
-inline constexpr unsigned long long MaxArchiveBytes = 2ULL * 1024 * 1024 * 1024;
-inline constexpr unsigned long long MaxArchiveEntryBytes = MaxArchiveBytes;
+// FAT32 permits a single ZIP up to 4 GiB minus one byte. Keep individual
+// payload files and the expanded total under their independent limits.
+inline constexpr unsigned long long MaxArchiveBytes = 4ULL * 1024 * 1024 * 1024 - 1;
+inline constexpr unsigned long long MaxArchiveEntryBytes = 2ULL * 1024 * 1024 * 1024;
 inline constexpr unsigned long long MaxArchiveExpandedBytes = 5ULL * 1024 * 1024 * 1024;
 
 } // namespace unbound::config

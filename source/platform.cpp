@@ -14,6 +14,7 @@
 #include "install_activity.hpp"
 #include "install_discovery.hpp"
 #include "archive_limits.hpp"
+#include "tester_archive.hpp"
 #include "directory_policy.hpp"
 #include "title_folder_link.hpp"
 #include "inherited_content.hpp"
@@ -63,6 +64,8 @@
 
 namespace unbound {
 namespace {
+static_assert(sizeof(off_t) >= 8, "HQ requires 64-bit file offsets for large ZIPs");
+static_assert(sizeof(decltype(std::declval<struct stat>().st_size)) >= 8, "HQ requires 64-bit file sizes");
 bool mochaReady = false;
 bool mlcMounted = false;
 bool usbMounted = false;
@@ -1968,6 +1971,7 @@ bool extractArchiveImpl(const std::string& archive, Mapper mapper, void* context
     std::vector<ArchiveEntry> entries;
     entries.reserve(static_cast<std::size_t>(entryCount));
     unsigned long long mlcRequired = 0, usbRequired = 0, sdRequired = 0;
+    const bool testerArchive = archive == config::TesterArchivePath && mapper == coreMapper;
     std::unordered_set<std::string> mappedFiles;
     for (zip_uint64_t index = 0; index < static_cast<zip_uint64_t>(entryCount); ++index) {
         if(progress)progress("Checking package","Checking archive entry "+std::to_string(index+1)+
@@ -1996,6 +2000,7 @@ bool extractArchiveImpl(const std::string& archive, Mapper mapper, void* context
             return false;
         }
         bytes += info.size;
+        if (testerArchive && testerReadmeEntry(name, directory, info.size)) continue;
         std::string target,logical;
         if (!mapper(name,target,logical,context)) { error = "Archive contains an unsupported path: " + name; return false; }
         if (reservedInstallPayloadPath(logical)) {
@@ -3987,7 +3992,8 @@ bool inspectDiagnosticArchive(DiagnosticArchiveInfo& info, std::string& error,
             info.present = true;
             if (!S_ISREG(before.st_mode) || before.st_size <= 0 ||
                 static_cast<unsigned long long>(before.st_size) > config::MaxArchiveBytes) {
-                error = "The local update.zip must be a non-empty regular ZIP file no larger than 2 GiB";
+                error = "The local update.zip must be a non-empty regular ZIP file no larger than " +
+                        std::to_string(config::MaxArchiveBytes) + " bytes";
                 return false;
             }
             info.compressedBytes = static_cast<unsigned long long>(before.st_size);

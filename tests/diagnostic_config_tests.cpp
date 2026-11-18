@@ -7,7 +7,7 @@
 int main() {
     using namespace unbound::config;
     using namespace std::literals;
-    assert(AppReleaseRevision == 60);
+    assert(AppReleaseRevision == 61);
     assert(ReleasesUrl == "https://downloads.unc-bo2.fun/release-manifest.txt"sv);
     assert(std::string_view(MapPacksUrl)==ReleasesUrl);
     assert(VersionRelativePath == "content/update.txt"sv);

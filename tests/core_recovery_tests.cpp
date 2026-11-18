@@ -480,6 +480,10 @@ int main() {
     for (std::size_t index = 0; index < windowsText.size(); ++index)
         if (windowsText[index] == '\n') windowsText.insert(index++, 1, '\r');
     assert(parseCoreRecovery(windowsText, decoded, error));
+    auto largeArchive = saved;
+    largeArchive.plan.front().compressedBytes = 3520339520ULL;
+    roundTrip(largeArchive);
+
     for (const auto& bad : {
             replaceText(text, "HQCORE1", "HQCORE2"),
             replaceText(text, "target=usb:", "target=disc:"),
@@ -508,7 +512,7 @@ int main() {
             replaceText(text, "full.zip", "full.zip extra"),
             replaceText(text, DigestA, std::string(64, 'x')),
             replaceText(text, DigestA, std::string(63, 'a')),
-            replaceText(text, "|200000000", "|2147483649"),
+            replaceText(text, "|200000000", "|" + std::to_string(config::MaxArchiveBytes + 1)),
             replaceText(text, "|200000000", "|-1"),
             replaceText(text, "|200000000", "|18446744073709551616"),
             replaceText(text, "UNIVERSAL|FULL|-", "JPN|FULL|-"),

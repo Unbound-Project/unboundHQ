@@ -174,7 +174,7 @@ int main() {
     contains(report, "Base title ID: 000500001010CF00");
     contains(report, "Game-content writes: Blocked / read-only this session");
     contains(report, "Game-content backups: Disabled; no automatic rollback");
-    contains(report, "Core ZIP download limit: 2147483648 bytes");
+    contains(report, "Core ZIP download limit: 4294967295 bytes");
     contains(report, "Core expanded-package limit: 5368709120 bytes");
     contains(report, "Core individual-file limit: 2147483648 bytes");
     contains(report, "Failed game-content install: Relaunch HQ and retry the same package before playing.");

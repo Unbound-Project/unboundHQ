@@ -1,4 +1,6 @@
 #include "buffered_zip.hpp"
+#include "archive_limits.hpp"
+#include "tester_archive.hpp"
 #include "install_stream.hpp"
 #include "sha256.hpp"
 
@@ -213,9 +215,54 @@ void storedEntryCrcStillRejectsCorruption(const std::filesystem::path& path,
     assert(fake_sdl::noHandles() && reader.close());
 }
 
+void combinedTesterArchive(const std::filesystem::path& path) {
+    const auto compressed = std::filesystem::file_size(path);
+    assert(compressed > 2ULL * 1024 * 1024 * 1024);
+    assert(compressed <= unbound::config::MaxArchiveBytes);
+    unbound::BufferedZipReader reader;
+    assert(reader.open(path.c_str()));
+    const auto count = zip_get_num_entries(reader.get(), ZIP_FL_UNCHANGED);
+    assert(count > 0 && count <= unbound::config::MaxArchiveFiles);
+    std::uint64_t expanded = 0;
+    unsigned payloads = 0;
+    unsigned readmes = 0;
+    unbound::AlignedIoBuffer transfer;
+    assert(transfer);
+    for (zip_uint64_t index = 0; index < static_cast<zip_uint64_t>(count); ++index) {
+        zip_stat_t info{};
+        assert(zip_stat_index(reader.get(), index, ZIP_FL_UNCHANGED, &info) == 0);
+        const std::string name(info.name);
+        const bool directory = !name.empty() && name.back() == '/';
+        assert(unbound::archiveSizeLimit(expanded, info.size) == unbound::ArchiveSizeLimit::None);
+        expanded += info.size;
+        if (unbound::testerReadmeEntry(name, directory, info.size)) {
+            ++readmes;
+            continue;
+        }
+        if (directory) continue;
+        assert(name.rfind("update/code/", 0) == 0 || name.rfind("update/content/", 0) == 0);
+        zip_file_t* entry = zip_fopen_index(reader.get(), index, ZIP_FL_UNCHANGED);
+        assert(entry);
+        unbound::Sha256 output;
+        unbound::OperationMetrics metrics;
+        const auto result = unbound::streamInstallEntry(info.size, transfer.data(), transfer.size(),
+            [entry](char* bytes, std::size_t size) { return zip_fread(entry, bytes, size); },
+            [&output](const char* bytes, std::size_t size) { output.update(bytes, size); return size; },
+            [](std::size_t) {}, metrics);
+        assert(result == unbound::InstallStreamResult::Success);
+        assert(zip_fclose(entry) == 0 && fake_sdl::noHandles());
+        assert(metrics.bytesRead == info.size && metrics.bytesWritten == info.size);
+        ++payloads;
+    }
+    assert(payloads == 101 && readmes == 1 && expanded == 4755944782ULL);
+    assert(reader.close());
+    std::printf("Combined tester passed: %u payloads, root readme skipped, %llu expanded bytes streamed with CRC checks.\n",
+                payloads, static_cast<unsigned long long>(expanded));
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     Scratch scratch;
     const auto bytes = payload(3 * 1024 * 1024 + 37);
     const auto archive = scratch.path / "valid.zip";
@@ -223,5 +270,6 @@ int main() {
     storedDeflatedReadAheadAndFallback(archive, bytes);
     invalidArchivesReleaseSources(scratch.path, archive);
     storedEntryCrcStillRejectsCorruption(scratch.path / "corrupted.zip", bytes);
+    if (argc == 2) combinedTesterArchive(argv[1]);
     std::puts("Buffered real-libzip read-ahead, pipeline FILE/hash roundtrips, ownership, fallback and CRC tests passed.");
 }
