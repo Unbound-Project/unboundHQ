@@ -16,9 +16,11 @@ p.add_argument('--order', type=int, default=10)
 p.add_argument('--version', required=True)
 p.add_argument('--from-version', default='')
 p.add_argument('--url', required=True)
+p.add_argument('--custom',action='store_true',help='Write a separate Custom Maps catalog; IDs must start with custom-.')
 a = p.parse_args()
 def fail(message): p.error(message)
 if not re.fullmatch(r'[a-z0-9-]{1,64}', a.id): fail('Use a stable lowercase pack ID with letters, digits and hyphens.')
+if a.custom and (not a.id.startswith('custom-') or len(a.id)==7): fail('Custom map IDs must start with custom- and include a unique name.')
 for value in (a.name, a.description, a.url):
     if any(c in value for c in '\r\n|'): fail('Names, descriptions and URLs must be single lines without | characters.')
 if not a.name or not a.description or len(a.name)>100 or len(a.description)>1800 or not 0<=a.order<=99999: fail('Metadata exceeds HQ limits.')
@@ -50,7 +52,8 @@ with zipfile.ZipFile(a.zip) as z:
     bad=z.testzip()
     if bad: fail('Corrupt ZIP entry: '+bad)
 with a.zip.open('rb') as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()
-lines=a.manifest.read_text(encoding='utf-8-sig').splitlines() if a.manifest.exists() else ['# UNBOUND_RELEASE_MANIFEST_V1']
+lines=a.manifest.read_text(encoding='utf-8-sig').splitlines() if a.manifest.exists() else ['# UNBOUND_CUSTOM_MAPS_V1' if a.custom else '# UNBOUND_RELEASE_MANIFEST_V1']
+if a.custom and '# UNBOUND_CUSTOM_MAPS_V1' not in lines: fail('Use a separate manifest beginning with # UNBOUND_CUSTOM_MAPS_V1.')
 if a.from_version:
     if not any(line.startswith('FILE|'+a.id+'|FULL|-|'+a.version+'|') for line in lines): fail('Publish/add the matching current FULL record before adding a patch.')
     if (tuple(map(int,re.findall(r'\d+',a.from_version)))+(0,)*32)[:32]>=(tuple(map(int,re.findall(r'\d+',a.version)))+(0,)*32)[:32]: fail('Patch FROM must be older than TO.')

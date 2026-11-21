@@ -21,6 +21,8 @@
 
 namespace unbound {
 
+enum class WorkshopTab { Plugins, CustomMaps };
+
 class Ui {
 public:
 #ifdef HQ_LAYOUT_PREVIEW
@@ -107,6 +109,10 @@ public:
                        const std::string& catalogNotice,
                        const std::vector<bool>& releaseReady = {});
     int pluginCatalogMaximumScroll() const { return pluginCatalogMaximumScroll_; }
+    void workshopCustomMaps(const std::vector<MapPack>& maps = {},
+                            const std::vector<std::string>& installed = {},
+                            std::size_t selected = 0,int scrollOffset = 0,
+                            const std::string& notice = {},bool installReady = false);
     void pluginDetails(const WorkshopPlugin& plugin, const PluginRelease* release,
                        const PluginInstallStatus& status, bool autoUpdateEnabled,
                        int selectedAction, int scrollOffset, const std::string& notice,
@@ -245,6 +251,7 @@ private:
     void present();
     void pill(const std::string& value, int x, int y, SDL_Color fill);
     SDL_Texture* pluginArtwork(const WorkshopPlugin& plugin) const;
+    void workshopHeader(WorkshopTab tab);
     CachedText richTexture(TTF_Font* font, const std::string& value, int width,
                            SDL_Color color);
     void prepareSupport(const std::string& report);

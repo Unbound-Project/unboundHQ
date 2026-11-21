@@ -129,6 +129,35 @@ int main(int argc,char** argv){
  ui.setNavigation(2,false);
  ui.pluginCatalog(plugins,{installed,{},{}},{true,true,true},0,0,"",{true,true,true});
  if(!capture("workshop")||!tap(1050,580,TouchActionKind::PluginRow,0))return 13;
+ if(!tap(1140,146,TouchActionKind::WorkshopTab,1))return 50;
+ ui.touchAction({true,true,1050,580});
+ ui.workshopCustomMaps();
+ if(ui.touchAction({true,false,1050,580}))return 51;
+ if(!capture("workshop-custom-maps")||!tap(920,146,TouchActionKind::WorkshopTab,0))return 52;
+ ui.touchAction({true,true,1050,580});
+ if(ui.touchAction({true,false,1050,580}))return 53;
+ if(!tap(105,300,TouchActionKind::Sidebar,2))return 54;
+ if(!tap(1060,690,TouchActionKind::Button,int(button::B)))return 55;
+ config::activeGame=Game::Ghosts;
+ ui.workshopCustomMaps();
+ if(!capture("workshop-custom-maps-ghosts")||!tap(1140,146,TouchActionKind::WorkshopTab,1))return 56;
+ config::activeGame=Game::BlackOpsII;
+ ui.pluginCatalog(plugins,{installed,{},{}},{true,true,true},1,0,"",{true,true,true});
+ if(!tap(1050,580,TouchActionKind::PluginRow,1)||!tap(1140,146,TouchActionKind::WorkshopTab,1))return 57;
+ // Both arrow buttons remain touchable in the footer.
+ if(!tap(565,690,TouchActionKind::Button,int(button::Left))||
+    !tap(615,690,TouchActionKind::Button,int(button::Right)))return 58;
+ MapPack custom;custom.id="custom-island";custom.name="Island Outpost";
+ custom.description="A community survival map. Hold the outpost and watch the shoreline.";
+ custom.full={"UNIVERSAL",ReleaseKind::Full,"","1.0.1","https://example.test/Island-v1.0.1.zip",std::string(64,'a'),268435456};
+ custom.patches.push_back({"UNIVERSAL",ReleaseKind::Patch,"1.0.0","1.0.1","https://example.test/Island-patch.zip",std::string(64,'b'),10485760});
+ ui.workshopCustomMaps({custom},{"1.0.0"},0,0,"",true);
+ if(!capture("workshop-custom-maps-update")||!tap(1050,580,TouchActionKind::CustomMapAction,0)||
+    !tap(450,300,TouchActionKind::CustomMapRow,0))return 59;
+ ui.workshopCustomMaps({custom},{"1.0.1"},0,0,"",true);
+ if(!capture("workshop-custom-maps-reinstall")||!tap(1050,580,TouchActionKind::CustomMapAction,0))return 60;
+ ui.workshopCustomMaps({custom},{"1.0.2"},0,0,"",true);
+ ui.touchAction({true,true,1050,580});if(ui.touchAction({true,false,1050,580}))return 61;
  PluginRelease pluginRelease;pluginRelease.version="1.0.1";pluginRelease.revision=2;
  ui.pluginDetails(plugins[0],&pluginRelease,installed,true,0,0,"","Release check complete.");
  if(!capture("plugin-details"))return 14;
@@ -158,7 +187,8 @@ int main(int argc,char** argv){
  if(!capture("supply-run-jump"))return 17;
 #ifdef HQ_LAYOUT_PREVIEW
  std::array<bool,SupplyRun::Obstacles.size()> captured{};
- bool duckGull=false,duckPlane=false;
+ bool duckGull=false,duckPlane=false,lisaPickup=false,lisaShield=false,lisaDance=false;
+ int lisaFirstPhase=-1;
  std::uint32_t virtualTime=SDL_GetTicks();
  for(unsigned frame=0;frame<7200;++frame){
      const auto& game=ui.waitingGamePreviewState();
@@ -172,6 +202,9 @@ int main(int argc,char** argv){
      if(incoming&&!SupplyRun::overhead(incoming->kind)&&incoming->x>SupplyRun::PlayerX&&incoming->x<240&&game.height()==0)ui.waitingGameInput(button::A);
      ui.waitingGamePreviewFrame(virtualTime+=33);
      if(game.crashed())return 22;
+     if(game.powerupVisible()&&game.powerupX()>300&&game.powerupX()<600&&!lisaPickup){lisaPickup=true;if(!capture("supply-run-lisa-pickup"))return 62;}
+     if(game.invincible()&&!lisaShield){lisaShield=true;lisaFirstPhase=int((virtualTime/170)%2);if(!capture("supply-run-lisa-shield"))return 63;}
+     if(game.invincible()&&lisaShield&&int((virtualTime/170)%2)!=lisaFirstPhase&&!lisaDance){lisaDance=true;if(!capture("supply-run-lisa-dance"))return 64;}
      const SupplyRun::Obstacle* next=nullptr;
      for(const auto& obstacle:game.obstacles()){
          if(obstacle.x+SupplyRun::Obstacles[obstacle.kind].width<SupplyRun::PlayerX)continue;
@@ -185,9 +218,9 @@ int main(int argc,char** argv){
          if(next->kind==3&&!duckGull){duckGull=true;if(!capture("supply-run-duck-seagull"))return 30;}
          if(next->kind==7&&!duckPlane){duckPlane=true;if(!capture("supply-run-duck-plane"))return 31;}
      }
-     if(captured[3]&&captured[4]&&captured[5]&&captured[6]&&captured[7]&&captured[8]&&duckGull&&duckPlane)break;
+     if(std::all_of(captured.begin()+3,captured.end(),[](bool value){return value;})&&duckGull&&duckPlane&&lisaPickup&&lisaShield&&lisaDance)break;
  }
- if(!captured[3]||!captured[4]||!captured[5]||!captured[6]||!captured[7]||!captured[8]||!duckGull||!duckPlane)return 24;
+ if(!std::all_of(captured.begin()+3,captured.end(),[](bool value){return value;})||!duckGull||!duckPlane||!lisaPickup||!lisaShield||!lisaDance)return 24;
 #endif
  // The sidebar/game-toggle locations have no navigation routes during work.
  for(const auto& point:{std::pair{100,160},std::pair{560,51}}){

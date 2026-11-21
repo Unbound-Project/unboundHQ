@@ -89,6 +89,9 @@ test:
 	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/map_packs_tests.cpp source/model.cpp -o map_packs_tests
 	@./map_packs_tests
 	@rm -f map_packs_tests
+	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/custom_maps_tests.cpp source/model.cpp -o custom_maps_tests
+	@./custom_maps_tests
+	@rm -f custom_maps_tests
 	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/network_tests.cpp source/network_schema.cpp $$(pkg-config --cflags --libs sdl2) -o network_tests
 	@./network_tests
 	@rm -f network_tests

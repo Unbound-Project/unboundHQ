@@ -106,14 +106,46 @@ int main(){
     // Ignoring duck still collides with the first overhead seagull.
     SupplyRun noDuck;
     for(unsigned tick=33;tick<6000&&!noDuck.crashed();tick+=33){
+        if(noDuck.powerupVisible()&&noDuck.powerupX()>SupplyRun::PlayerX+30&&noDuck.powerupX()<240&&noDuck.height()==0)noDuck.queueJump();
         for(const auto& obstacle:noDuck.obstacles())
             if(!SupplyRun::overhead(obstacle.kind)&&obstacle.x>SupplyRun::PlayerX&&obstacle.x<240&&noDuck.height()==0)noDuck.queueJump();
         noDuck.update(tick);
     }
     assert(noDuck.crashed());
 
+    // Collecting Lisa gives a bounded shield and a score bonus; the game still
+    // advances, and ordinary collisions resume when the shield runs out.
+    const auto pilot=[](SupplyRun& run){
+        const SupplyRun::Obstacle* next=nullptr;
+        for(const auto& obstacle:run.obstacles()){
+            if(obstacle.x+SupplyRun::Obstacles[obstacle.kind].width<SupplyRun::PlayerX)continue;
+            if(!next||obstacle.x<next->x)next=&obstacle;
+        }
+        run.setDucking(next&&SupplyRun::overhead(next->kind)&&next->x<265);
+        if(next&&!SupplyRun::overhead(next->kind)&&next->x>SupplyRun::PlayerX&&next->x<240&&run.height()==0)run.queueJump();
+    };
+    SupplyRun shield;unsigned shieldTick=0;
+    for(unsigned frame=0;frame<1800&&!shield.pickups();++frame){pilot(shield);shield.update(shieldTick+=33);assert(!shield.crashed());}
+    assert(shield.pickups()==1&&shield.invincible()&&!shield.powerupVisible());
+    assert(shield.score()>=unsigned(shield.distance()/10)+100);
+    bool crossedHazard=false;
+    shield.setDucking(false);
+    for(unsigned frame=0;frame<70;++frame){
+        shield.update(shieldTick+=33);
+        for(const auto& obstacle:shield.obstacles())if(obstacle.x<SupplyRun::PlayerX+SupplyRun::PlayerWidth&&obstacle.x+SupplyRun::Obstacles[obstacle.kind].width>SupplyRun::PlayerX)crossedHazard=true;
+        assert(!shield.crashed()&&shield.invincible());
+    }
+    assert(crossedHazard);
+    const auto beforePause=shield.powerupSeconds();shieldTick+=50000;shield.resume(shieldTick);shield.update(shieldTick+=33);
+    assert(shield.powerupSeconds()>beforePause-.04f);
+    for(unsigned frame=0;frame<160&&shield.invincible();++frame){pilot(shield);shield.update(shieldTick+=33);assert(!shield.crashed());}
+    assert(!shield.invincible());
+    for(unsigned frame=0;frame<300&&!shield.crashed();++frame){shield.setDucking(false);shield.update(shieldTick+=33);}
+    assert(shield.crashed());shieldTick+=1000;shield.queueJump();shield.update(shieldTick+=33);
+    assert(!shield.crashed()&&!shield.invincible()&&shield.pickups()==0&&shield.score()==0);
+
     SupplyRun wrap;
     wrap.resume(0xfffffff0u);wrap.queueJump();wrap.update(20);
     assert(wrap.height()>0&&wrap.distance()<15);
-    std::cout<<"Supply Run: jump, collision, restart, held duck, overhead collision, plane/Brutus, every Easter egg, randomized safe gaps, bounded timing and clock wrap passed\n";
+    std::cout<<"Supply Run: all eleven obstacles, jump/duck, safe randomized gaps, Lisa pickup/bonus/shield/expiry/restart, bounded timing and clock wrap passed\n";
 }

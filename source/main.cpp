@@ -19,6 +19,7 @@
 #include "plugin_policy.hpp"
 #include "install_feedback.hpp"
 #include "inherited_repair_gate.hpp"
+#include "custom_maps.hpp"
 
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
@@ -877,6 +878,7 @@ bool installCorePlan(Ui& ui,GameInstall& install,const std::vector<const Release
 }
 
 #include "map_pack_flow.hpp"
+#include "custom_map_flow.hpp"
 
 enum class InstallMenuResult { Back, Exit, Completed };
 
@@ -1417,6 +1419,7 @@ int main(){
         sessionMapCatalogLoaded=false;
         sessionMapCatalog.clear();
         sessionMapNotice.clear();
+        sessionCustomMapsLoaded=false;sessionCustomMaps.clear();sessionCustomMapsNotice.clear();
         bool releasesChanged=false,changesChanged=false,downloadedArtwork=false;
         install={};
         install.game=config::activeGame;
@@ -1612,6 +1615,10 @@ int main(){
     GlobeMotion globeMotion;
     std::uint32_t globeFrame=0;
     Screen screen=Screen::Home;int detailAction=0,catalogScroll=0,detailScroll=0,newsScroll=0,newsScrollTarget=0,localScroll=0;
+    WorkshopTab workshopTab=WorkshopTab::Plugins;
+    std::size_t customSelected=0;int customScroll=0,customScrollTarget=0;
+    std::vector<std::string> customVersions;
+    bool customMapStatusDirty=true;
     DashboardNavigation dashboard;
     int pendingSection=-1;
     int catalogScrollTarget=0,detailScrollTarget=0,localScrollTarget=0,localDetailsScroll=0,localDetailsScrollTarget=0;
@@ -1791,7 +1798,19 @@ int main(){
                      touch->value>=0&&static_cast<std::size_t>(touch->value)<localMods.size()){
                 localSelected=static_cast<std::size_t>(touch->value);
                 localDetailsScroll=0;localDetailsScrollTarget=0;redraw=true;
-            }else if(screen==Screen::Catalog&&touch->kind==TouchActionKind::PluginRow&&
+            }else if(screen==Screen::Catalog&&touch->kind==TouchActionKind::WorkshopTab&&
+                     touch->value>=0&&touch->value<=1&&!(b&(button::B|button::L))){
+                workshopTab=touch->value==0?WorkshopTab::Plugins:WorkshopTab::CustomMaps;
+                b=0;redraw=true;
+            }else if(screen==Screen::Catalog&&workshopTab==WorkshopTab::CustomMaps&&
+                     touch->kind==TouchActionKind::CustomMapRow&&touch->value>=0&&
+                     static_cast<std::size_t>(touch->value)<sessionCustomMaps.size()){
+                customSelected=static_cast<std::size_t>(touch->value);b=0;redraw=true;
+            }else if(screen==Screen::Catalog&&workshopTab==WorkshopTab::CustomMaps&&
+                     touch->kind==TouchActionKind::CustomMapAction&&touch->value>=0&&
+                     static_cast<std::size_t>(touch->value)<sessionCustomMaps.size()){
+                customSelected=static_cast<std::size_t>(touch->value);b=button::A;redraw=true;
+            }else if(screen==Screen::Catalog&&workshopTab==WorkshopTab::Plugins&&touch->kind==TouchActionKind::PluginRow&&
                      touch->value>=0&&static_cast<std::size_t>(touch->value)<pluginRuntimes.size()){
                 selected=static_cast<std::size_t>(touch->value);b=button::A;redraw=true;
             }else if(screen==Screen::Details&&touch->kind==TouchActionKind::PluginAction&&
@@ -1825,6 +1844,7 @@ int main(){
                 else if(homeAction==2){
                     std::string workshopWarning;
                     if(openWorkshop(ui,pluginRuntimes,workshopWarning,false)){
+                        customMapStatusDirty=true;
                         selected=0;catalogScroll=0;catalogScrollTarget=0;detailScroll=0;detailScrollTarget=0;detailAction=0;
                         notice.clear();catalogNotice=workshopWarning;screen=Screen::Catalog;
                     }else waitModal(ui,"Workshop unavailable",workshopWarning.empty()?"No valid plugin listings are available.":workshopWarning,true);
@@ -1979,7 +1999,51 @@ int main(){
             }
         }else if(screen==Screen::Catalog){
             if((b&button::B)||(b&button::L)){screen=Screen::Home;dashboard.returnToMenu(2);notice.clear();catalogNotice.clear();redraw=true;continue;}
-            if(!pluginRuntimes.empty()){
+            if(b&(button::Left|button::Right)){
+                const auto next=(b&button::Right)?WorkshopTab::CustomMaps:WorkshopTab::Plugins;
+                if(next!=workshopTab){workshopTab=next;ui.invalidateTouch();redraw=true;}
+                b&=~(button::A|button::X);
+            }
+            if(workshopTab==WorkshopTab::CustomMaps){
+                if(!sessionCustomMapsLoaded||customMapStatusDirty){
+                    const bool firstLoad=!sessionCustomMapsLoaded;loadCustomMaps(ui);refreshCustomMapVersions(install,customVersions);
+                    if(firstLoad){customSelected=0;customScroll=customScrollTarget=0;}
+                    customMapStatusDirty=false;redraw=true;
+                }
+                if(b&button::X){
+                    const auto key=customSelected<sessionCustomMaps.size()?sessionCustomMaps[customSelected].id:std::string{};
+                    loadCustomMaps(ui,true);refreshCustomMapVersions(install,customVersions);customSelected=0;
+                    for(std::size_t i=0;i<sessionCustomMaps.size();++i)if(sessionCustomMaps[i].id==key)customSelected=i;
+                    customScroll=customScrollTarget=0;redraw=true;
+                }
+                if(!sessionCustomMaps.empty()){
+                    customSelected=std::min(customSelected,sessionCustomMaps.size()-1);
+                    if((b&button::Down)&&customSelected+1<sessionCustomMaps.size()){++customSelected;redraw=true;}
+                    if((b&button::Up)&&customSelected>0){--customSelected;redraw=true;}
+                    const int top=234+int(customSelected)*142-customScrollTarget;
+                    if(top>510)customScrollTarget=std::min(pluginCatalogMaximumScroll(sessionCustomMaps.size()),customScrollTarget+top-510);
+                    if(top<234)customScrollTarget=std::max(0,customScrollTarget-(234-top));
+                    if(b&button::A){
+                        const auto& map=sessionCustomMaps[customSelected];
+                        const auto version=customSelected<customVersions.size()?customVersions[customSelected]:std::string{};
+                        const auto* release=mapPackRelease(map,version,version==map.full.version);
+                        if(!contentUpdatesAllowed)waitModal(ui,"HQ update required","Install the HQ update before changing game files.",true);
+                        else if(repairNeeded())waitModal(ui,"Finish the current installation","Open Install / Update and finish the saved repair or installation before adding a custom map.",true);
+                        else if(!mapPackTargetReady(install)||install.modVersion.empty()||install.modVersion=="Not installed")
+                            waitModal(ui,"Install Core first","Use Install / Update to install Core on the correct USB or internal-storage game update before adding custom maps.",true);
+                        else if(!release)waitModal(ui,"Newer map installed","Your installed map is newer than this catalog entry. HQ will keep it.");
+                        else if(confirmAction(ui,version==map.full.version?"Reinstall custom map?":version.empty()?"Install custom map?":"Update custom map?",
+                            map.name+"\n\n"+map.description+"\n\nVersion: "+release->version+"\nPackage: "+packageBytes(release->compressedBytes)+
+                            "\nDestination: "+deviceName(install.update.device)+" / "+install.languageFolder,"INSTALL")){
+                            std::string mapError;downloadWasCancelled=false;
+                            if(installMapJobs(ui,install,{{map.id,map.name,*release}},mapError))waitModal(ui,"Custom map installed",map.name+" is ready. Launch the game through HQ.");
+                            else if(!downloadWasCancelled){lastSessionError=mapError;waitModal(ui,"Custom map install stopped",mapError,true);}
+                            refreshCustomMapVersions(install,customVersions);
+                        }
+                        redraw=true;
+                    }
+                }
+            }else if(!pluginRuntimes.empty()){
                 if((b&button::Down)&&selected+1<pluginRuntimes.size()){++selected;redraw=true;}
                 if((b&button::Up)&&selected>0){--selected;redraw=true;}
                 const int itemTop=234+int(selected)*142-catalogScrollTarget;
@@ -2081,7 +2145,8 @@ int main(){
         ui.setNetwork(networkFeed.snapshot(),globeMotion.yaw,globeMotion.pitch);
         const auto easeScroll=[&redraw](int& value,int target){const int distance=target-value;if(distance){value+=std::clamp(distance,-18,18);redraw=true;}};
         if(screen==Screen::Details)easeScroll(detailScroll,detailScrollTarget);
-        if(screen==Screen::Catalog)easeScroll(catalogScroll,catalogScrollTarget);
+        if(screen==Screen::Catalog&&workshopTab==WorkshopTab::Plugins)easeScroll(catalogScroll,catalogScrollTarget);
+        if(screen==Screen::Catalog&&workshopTab==WorkshopTab::CustomMaps)easeScroll(customScroll,customScrollTarget);
         if(screen==Screen::LocalMods){easeScroll(localScroll,localScrollTarget);easeScroll(localDetailsScroll,localDetailsScrollTarget);}
         if(redraw){
             const Release* release=releaseForSku(releases,install.sku);
@@ -2093,7 +2158,10 @@ int main(){
             else if(screen==Screen::News)ui.news(changes,newsScroll);
             else if(screen==Screen::Support)ui.support(supportReport.text,supportScroll,supportNotice);
             else if(screen==Screen::LocalMods)ui.localModManager(localMods,localSelected,localScroll,notice,!config::ghostsMode(),install.update.device,localDetailsScroll);
-            else if(screen==Screen::Catalog){std::vector<WorkshopPlugin> plugins;std::vector<PluginInstallStatus> statuses;std::vector<bool> checked,ready;for(const auto& runtime:pluginRuntimes){plugins.push_back(runtime.plugin);statuses.push_back(runtime.status);checked.push_back(runtime.checked);ready.push_back(runtime.releaseReady);}ui.pluginCatalog(plugins,statuses,checked,selected,catalogScroll,catalogNotice,ready);}
+            else if(screen==Screen::Catalog){
+                if(workshopTab==WorkshopTab::CustomMaps)ui.workshopCustomMaps(sessionCustomMaps,customVersions,customSelected,customScroll,sessionCustomMapsNotice,contentUpdatesAllowed&&mapPackTargetReady(install)&&!repairNeeded()&&!install.modVersion.empty()&&install.modVersion!="Not installed");
+                else{std::vector<WorkshopPlugin> plugins;std::vector<PluginInstallStatus> statuses;std::vector<bool> checked,ready;for(const auto& runtime:pluginRuntimes){plugins.push_back(runtime.plugin);statuses.push_back(runtime.status);checked.push_back(runtime.checked);ready.push_back(runtime.releaseReady);}ui.pluginCatalog(plugins,statuses,checked,selected,catalogScroll,catalogNotice,ready);}
+            }
             else if(screen==Screen::Details&&!pluginRuntimes.empty()){const auto& runtime=pluginRuntimes[selected];ui.pluginDetails(runtime.plugin,runtime.releaseReady?&runtime.release:nullptr,runtime.status,runtime.autoUpdateEnabled,detailAction,detailScroll,notice,runtime.feedStatus);}
             redraw=false;
         }

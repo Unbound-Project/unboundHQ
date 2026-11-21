@@ -45,6 +45,9 @@ enum class TouchActionKind {
     MapPackRow,
     MapPackDetails,
     PluginRow,
+    WorkshopTab,
+    CustomMapRow,
+    CustomMapAction,
     PluginAction,
 };
 

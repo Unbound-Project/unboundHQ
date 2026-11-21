@@ -14,5 +14,13 @@ with tempfile.TemporaryDirectory(dir="r2-test") as temp:
     assert 'PATCH|1.0.0|1.1.0' in manifest.read_text()
     with zipfile.ZipFile(archive,'w') as z:z.writestr('update/code/game.rpl',b'not a map')
     assert subprocess.run(args,capture_output=True).returncode!=0
+    with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:z.writestr('content/@language/custom.ff',b'custom map bytes')
+    custom=list(args);custom[custom.index('--manifest')+1]=str(root/'custom-maps.txt')
+    custom[custom.index('--id')+1]='custom-island';custom.append('--custom')
+    subprocess.run(custom,check=True,capture_output=True)
+    custom_text=(root/'custom-maps.txt').read_text()
+    assert custom_text.startswith('# UNBOUND_CUSTOM_MAPS_V1\n') and 'PACK|custom-island|' in custom_text
+    custom[custom.index('--id')+1]='pack-1'
+    assert subprocess.run(custom,capture_output=True).returncode!=0
 print('Publisher helper: real ZIP CRC/hash/size, patch record and forbidden code path checks passed.')
 

@@ -4,6 +4,7 @@
 #include "plugin_policy.hpp"
 #include "install_feedback.hpp"
 #include "supply_run_art.hpp"
+#include "supply_run_extra_art.hpp"
 #include <SDL2/SDL_image.h>
 #include <algorithm>
 #include <array>
@@ -641,7 +642,7 @@ void Ui::loadWaitingGame(){
                                            SDL_TEXTUREACCESS_TARGET,W,H);
     if(!downloadScreenCache_)return;
     SDL_SetTextureBlendMode(downloadScreenCache_,SDL_BLENDMODE_NONE);
-    SDL_Surface* atlas=SDL_CreateRGBSurfaceWithFormat(0,512,80,32,SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface* atlas=SDL_CreateRGBSurfaceWithFormat(0,512,112,32,SDL_PIXELFORMAT_RGBA32);
     if(!atlas)return;
     SDL_FillRect(atlas,nullptr,SDL_MapRGBA(atlas->format,0,0,0,0));
     const auto color=[](char pixel){
@@ -656,6 +657,15 @@ void Ui::loadWaitingGame(){
             case 'r':return SDL_Color{211,46,48,255};
             case 'b':return SDL_Color{148,100,60,255};
             case 'n':return SDL_Color{53,65,81,255};
+            case 'y':return SDL_Color{249,213,50,255};
+            case 'h':return SDL_Color{37,29,25,255};
+            case 'p':return SDL_Color{172,161,147,255};
+            case 'c':return SDL_Color{50,48,47,255};
+            case 't':return SDL_Color{83,77,72,255};
+            case 'a':return SDL_Color{78,82,66,255};
+            case 'f':return SDL_Color{132,143,128,255};
+            case 'u':return SDL_Color{42,66,69,255};
+            case 'e':return SDL_Color{255,186,54,255};
             default:return SDL_Color{242,138,32,255};
         }
     };
@@ -677,6 +687,9 @@ void Ui::loadWaitingGame(){
     paint(supply_art::Juggernog,288,0);
     paint(supply_art::MobPlane,320,0);paint(supply_art::Brutus,352,0);
     paint(supply_art::DuckSoldier,384,0);paint(supply_art::SeagullFlap,416,0);
+    paint(supply_art::BuriedWitch,448,0);paint(supply_art::Panzer,480,0);
+    paint(supply_art::LisaHead,0,76);paint(supply_art::LisaDanceA,0,94);
+    paint(supply_art::LisaHead,32,76);paint(supply_art::LisaDanceB,32,94);
     // Cache the score digits once: no per-frame font rasterization or uploads.
     for(int digit=0;digit<10;++digit){
         const char label[]{char('0'+digit),0};
@@ -734,25 +747,43 @@ void Ui::drawWaitingGame(std::uint32_t now){
         SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
     };
     const int frame=supplyRun_.height()>0?2:(now/120)%2;
+    if(supplyRun_.invincible()){
+        SDL_SetTextureColorMod(waitingAtlas_,255,224,100);
+        SDL_SetRenderDrawColor(renderer_,249,213,50,190);
+        const SDL_Rect aura{64+int(SupplyRun::PlayerX)-18,ground-int(supplyRun_.height())-76,72,80};
+        SDL_RenderDrawRect(renderer_,&aura);
+    }
     if(supplyRun_.ducking()){
         const SDL_Rect source{384,0,32,18};
         const SDL_Rect target{64+int(SupplyRun::PlayerX)-14,ground-36,64,36};
         SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
     }else sprite(frame,64+int(SupplyRun::PlayerX)-14,ground-int(supplyRun_.height()),64,72);
+    SDL_SetTextureColorMod(waitingAtlas_,255,255,255);
     for(const auto& obstacle:supplyRun_.obstacles()){
         const auto& definition=SupplyRun::Obstacles[obstacle.kind];
         const int bottom=ground-int(SupplyRun::obstacleLift(obstacle))+(obstacle.kind==3?int((now/160)%2)*3:0);
-        const SDL_Rect source{obstacle.kind==3&&(now/160)%2?416:96+int(obstacle.kind)*32,0,32,definition.spriteHeight};
+        const int spriteX=obstacle.kind>=9?448+int(obstacle.kind-9)*32:
+                         obstacle.kind==3&&(now/160)%2?416:96+int(obstacle.kind)*32;
+        const SDL_Rect source{spriteX,0,32,definition.spriteHeight};
         const int height=source.h*2;
         const SDL_Rect target{64+int(obstacle.x),bottom-height,64,height};
         SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
+    }
+    if(supplyRun_.powerupVisible()||supplyRun_.invincible()){
+        const SDL_Rect source{int((now/170)%2)*32,76,32,36};
+        const SDL_Rect target=supplyRun_.invincible()?SDL_Rect{1064,400,64,72}:
+            SDL_Rect{64+int(supplyRun_.powerupX())-10,ground-72,64,72};
+        SDL_RenderCopy(renderer_,waitingAtlas_,&source,&target);
+        if(supplyRun_.powerupVisible()&&!supplyRun_.invincible())
+            text(regular18_,"POWER-UP",target.x-12,target.y-28,{249,213,50,255},110);
     }
     const SupplyRun::Obstacle* next=nullptr;
     for(const auto& obstacle:supplyRun_.obstacles()){
         if(obstacle.x+SupplyRun::Obstacles[obstacle.kind].width<SupplyRun::PlayerX)continue;
         if(!next||obstacle.x<next->x)next=&obstacle;
     }
-    if(next)text(regular18_,"INCOMING: "+std::string(SupplyRun::Obstacles[next->kind].joke)+(SupplyRun::overhead(next->kind)?"  [DUCK]":"  [JUMP]"),W/2,365,Muted,1040,true);
+    if(supplyRun_.invincible())text(bold20_,"LISA DANCE SHIELD  ·  "+std::to_string(int(std::ceil(supplyRun_.powerupSeconds())))+"s  ·  +100 POINTS",W/2,365,{249,213,50,255},1040,true);
+    else if(next)text(regular18_,"INCOMING: "+std::string(SupplyRun::Obstacles[next->kind].joke)+(SupplyRun::overhead(next->kind)?"  [DUCK]":"  [JUMP]"),W/2,365,Muted,1040,true);
     SDL_RenderSetClipRect(renderer_,nullptr);
     const auto digits=[&](unsigned value,int right,SDL_Color color){
         SDL_SetTextureColorMod(waitingAtlas_,color.r,color.g,color.b);
@@ -1477,6 +1508,81 @@ void Ui::localModManager(const std::vector<LocalModInventoryItem>& mods,
     present();
 }
 
+void Ui::workshopHeader(WorkshopTab tab){
+    text(bold38_,"Workshop",244,116,White,500);
+    text(regular18_,tab==WorkshopTab::Plugins?"The plugins that power your setup.":
+         "Community-made maps for "+std::string(gameName(config::activeGame))+".",244,173,Muted,1008);
+    const SDL_Rect tabs{812,122,440,48};
+    roundRect(tabs,8,PanelBorder);
+    roundRect({tabs.x+1,tabs.y+1,tabs.w-2,tabs.h-2},7,darkColor());
+    const char* labels[]={"Plugins","Custom Maps"};
+    for(int i=0;i<2;++i){
+        const SDL_Rect segment{tabs.x+i*220,tabs.y,220,tabs.h};
+        const bool active=int(tab)==i;
+        if(active)roundRect({segment.x+4,segment.y+4,segment.w-8,segment.h-8},5,raisedColor());
+        text(bold20_,labels[i],segment.x+segment.w/2,segment.y+10,
+             active?accentColor():Muted,segment.w-24,true);
+        touchTarget(segment,TouchActionKind::WorkshopTab,i);
+    }
+}
+
+void Ui::workshopCustomMaps(const std::vector<MapPack>& maps,const std::vector<std::string>& installed,
+                            std::size_t selected,int scrollOffset,const std::string& notice,bool installReady){
+    std::string identity=config::ghostsMode()?"workshop-custom-maps-ghosts":"workshop-custom-maps-bo2";
+    for(const auto& map:maps)identity+='|'+map.id+'@'+map.full.version;
+    pump();beginTouch(identity);
+    backdrop();header("");navigationRail(2);workshopHeader(WorkshopTab::CustomMaps);
+    if(!notice.empty())text(regular18_,notice,244,205,Muted,1008);
+    if(!maps.empty()){
+        const auto versionFor=[&](std::size_t i){return i<installed.size()?installed[i]:std::string{};};
+        const auto stateFor=[&](std::size_t i){
+            const auto version=versionFor(i);
+            return version.empty()?std::string("Not installed"):
+                compareVersions(version,maps[i].full.version)<0?std::string("Update available"):
+                compareVersions(version,maps[i].full.version)>0?std::string("Newer version installed"):std::string("Installed");
+        };
+        const SDL_Rect clip{244,234,574,408};SDL_RenderSetClipRect(renderer_,&clip);
+        for(std::size_t i=0;i<maps.size();++i){
+            const SDL_Rect row{244,234+int(i)*142-scrollOffset,574,126};
+            if(row.y+row.h<clip.y||row.y>clip.y+clip.h)continue;
+            quietPanel(row,i==selected);touchTarget(row,TouchActionKind::CustomMapRow,int(i),&clip);
+            roundRect({row.x+18,row.y+23,72,72},10,raisedColor());
+            auto* icon=navigationIcons_[2];const auto accent=accentColor();SDL_SetTextureColorMod(icon,accent.r,accent.g,accent.b);
+            const SDL_Rect symbol{row.x+34,row.y+39,40,40};SDL_RenderCopy(renderer_,icon,nullptr,&symbol);
+            text(bold20_,maps[i].name,row.x+112,row.y+14,White,440);
+            text(regular18_,"Version "+maps[i].full.version,row.x+112,row.y+46,Muted,440);
+            const auto state=stateFor(i);const auto color=state=="Installed"?Green:state=="Update available"?accentColor():Muted;
+            text(regular18_,state,row.x+112,row.y+82,color,440);
+        }
+        SDL_RenderSetClipRect(renderer_,nullptr);
+        scrollBar(clip,scrollOffset,std::max(0,int(maps.size())*142-16-408));
+        SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,848,239,848,643);
+        const auto index=std::min(selected,maps.size()-1);const auto& map=maps[index];const auto version=versionFor(index);
+        const auto* release=mapPackRelease(map,version,version==map.full.version);
+        const std::string action=version==map.full.version?"Reinstall map":version.empty()?"Install map":"Update map";
+        text(bold28_,map.name,878,238,White,364);
+        wrapped(regular18_,map.description,{878,288,364,126},LightText);
+        text(regular18_,"Latest",878,436,Muted,130);text(regular18_,map.full.version,1016,436,LightText,226);
+        text(regular18_,"Installed",878,473,Muted,130);text(regular18_,version.empty()?"None":version,1016,473,LightText,226);
+        const auto bytes=release?release->compressedBytes:map.full.compressedBytes;
+        text(regular18_,"Download: "+std::to_string((bytes+1048575)/1048576)+" MiB",878,512,Muted,364);
+        const SDL_Rect install{878,558,364,54};primaryAction(install,action,true,installReady&&release);
+        if(installReady&&release)touchTarget(install,TouchActionKind::CustomMapAction,int(index));
+        text(regular18_,installReady?"Verified install to USB / internal storage":"Check Install / Update before installing",878,625,Muted,364);
+        footer({{"A","Review / install"},{"UP/DN","Navigate"},{"DPAD-LR","Switch tab"},{"X/1","Refresh"},{"B","HQ"}});present();return;
+    }
+    quietPanel({244,234,1008,408});
+    roundRect({708,292,80,80},14,raisedColor());
+    auto* icon=navigationIcons_[2];const auto accent=accentColor();
+    SDL_SetTextureColorMod(icon,accent.r,accent.g,accent.b);
+    const SDL_Rect symbol{728,312,40,40};SDL_RenderCopy(renderer_,icon,nullptr,&symbol);
+    text(bold28_,"No custom maps available yet",748,404,White,900,true);
+    text(regular22_,"Check back for community releases.",748,455,LightText,900,true);
+    text(regular18_,"Use the Plugins tab to manage your Aroma plugins.",748,512,Muted,900,true);
+    suppressedTouchButtons_|=button::A;
+    footer({{"DPAD-LR","Switch tab"},{"X/1","Refresh"},{"B","HQ"}});present();
+}
+
 void Ui::pluginCatalog(const std::vector<WorkshopPlugin>& plugins,
                        const std::vector<PluginInstallStatus>& statuses,
                        const std::vector<bool>& checked,
@@ -1485,8 +1591,7 @@ void Ui::pluginCatalog(const std::vector<WorkshopPlugin>& plugins,
     std::string touchIdentity="plugin-catalog";
     for(const auto& plugin:plugins)touchIdentity+='|'+plugin.key;
     pump();beginTouch(touchIdentity);backdrop();header("");navigationRail(2);
-    text(bold38_,"Workshop",244,116,White,1008);
-    text(regular18_,"The plugins that power your setup.",244,173,Muted,1008);
+    workshopHeader(WorkshopTab::Plugins);
     if(!catalogNotice.empty())text(regular18_,catalogNotice,244,205,Muted,1008);
     const SDL_Rect clip{244,234,574,408};SDL_RenderSetClipRect(renderer_,&clip);
     const auto stateFor=[&](std::size_t i){
@@ -1540,7 +1645,7 @@ void Ui::pluginCatalog(const std::vector<WorkshopPlugin>& plugins,
         touchTarget(open,TouchActionKind::PluginRow,int(i));
         text(regular18_,"Review releases and auto-update settings",878,625,Muted,364);
     }
-    footer({{"A","Open plugin"},{"UP/DN","Navigate"},{"X/1","Refresh"},{"B","HQ"},{"+","Exit"}});present();
+    footer({{"A","Open plugin"},{"UP/DN","Navigate"},{"DPAD-LR","Switch tab"},{"X/1","Refresh"},{"B","HQ"}});present();
 }
 
 void Ui::pluginDetails(const WorkshopPlugin& plugin,const PluginRelease* release,

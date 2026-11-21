@@ -19,7 +19,7 @@ inline constexpr const char* AppVersion = "1.0.2";
 #endif
 // Monotonic integer used only by the HQ self-updater. Increment it for every
 // published WUHB, even when the display version is a beta or hotfix label.
-inline constexpr unsigned long long AppReleaseRevision = 63;
+inline constexpr unsigned long long AppReleaseRevision = 64;
 
 // Replace YOUR_GITHUB_NAME and the repository name with your public distribution repository.
 // See server-example/README.md for the recommended GitHub repository and Release layout.
@@ -89,6 +89,10 @@ inline constexpr const char* GhostsReleasesUrl = "https://downloads.unc-bo2.fun/
 inline constexpr const char* GhostsChangesUrl = "https://downloads.unc-bo2.fun/ghosts/recent-changes.txt";
 inline const char* gameReleasesUrl() { return ghostsMode() ? GhostsReleasesUrl : ReleasesUrl; }
 inline const char* gameChangesUrl() { return ghostsMode() ? GhostsChangesUrl : ChangesUrl; }
+inline const char* gameCustomMapsUrl() {
+    return ghostsMode()?"https://downloads.unc-bo2.fun/ghosts/custom-maps.txt":
+                        "https://downloads.unc-bo2.fun/custom-maps.txt";
+}
 inline const char* gameReleasesCachePath() {
     return ghostsMode() ? UNBOUND_HQ_SD_ROOT "/ghosts/cache/release-manifest.txt" : ReleasesCachePath;
 }
