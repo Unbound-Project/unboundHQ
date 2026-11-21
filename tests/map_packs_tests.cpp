@@ -19,6 +19,25 @@ int main(){
     assert(parseMapPacks(catalog,packs,error)&&packs.size()==2&&packs[0].id=="pack-1");
     const auto unified=std::string("# UNBOUND_RELEASE_MANIFEST_V1\n#CORE_SD|1.0.0\nUNIVERSAL|FULL|-|1.0.0|https://example.test/core.zip|")+hash+"|100\n"+catalog;
     assert(parseMapPacks(unified,packs,error)&&packs.size()==2);
+    // Real Uprising package, signed-32-bit boundary and FAT32 ceiling must all
+    // survive catalog parsing and release selection without narrowing sizes.
+    const auto largeCatalog=[&](std::uint64_t bytes,bool patch=false){
+        std::string text="PACK|pack-2|20|Unbound DLC 2: Uprising|Uprising maps\n";
+        text+="FILE|pack-2|FULL|-|1.0.1|https://downloads.unc-bo2.fun/uprising.zip|"+hash+"|"+std::to_string(bytes)+"\n";
+        if(patch)text+="FILE|pack-2|PATCH|1.0.0|1.0.1|https://downloads.unc-bo2.fun/patch.zip|"+hash+"|"+std::to_string(bytes)+"\n";
+        return text;
+    };
+    for(const auto bytes:{1871727718ULL,2147483648ULL,config::MaxArchiveBytes}){
+        assert(parseMapPacks(largeCatalog(bytes,true),packs,error)&&packs.size()==1);
+        assert(mapPackRelease(packs[0],"")->compressedBytes==bytes);
+        assert(mapPackRelease(packs[0],"1.0.0")->compressedBytes==bytes);
+        std::vector<std::string> sizeErrors;
+        const auto saved=parseReleases(releaseRecord(packs[0].full),&sizeErrors);
+        assert(sizeErrors.empty()&&saved.size()==1&&saved[0].compressedBytes==bytes);
+    }
+    for(const auto bytes:{config::MaxArchiveBytes+1,~0ULL})
+        assert(!parseMapPacks(largeCatalog(bytes),packs,error)&&packs.empty());
+    assert(parseMapPacks(unified,packs,error)&&packs.size()==2);
     std::vector<std::string> combinedErrors;
     auto core=parseReleases(unified,&combinedErrors);
     assert(combinedErrors.empty()&&core.size()==1&&core[0].version=="1.0.0");

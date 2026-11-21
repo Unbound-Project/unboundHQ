@@ -19,7 +19,7 @@ inline constexpr const char* AppVersion = "1.0.2";
 #endif
 // Monotonic integer used only by the HQ self-updater. Increment it for every
 // published WUHB, even when the display version is a beta or hotfix label.
-inline constexpr unsigned long long AppReleaseRevision = 62;
+inline constexpr unsigned long long AppReleaseRevision = 63;
 
 // Replace YOUR_GITHUB_NAME and the repository name with your public distribution repository.
 // See server-example/README.md for the recommended GitHub repository and Release layout.

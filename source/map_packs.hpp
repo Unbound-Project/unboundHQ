@@ -1,5 +1,6 @@
 #pragma once
 #include "model.hpp"
+#include "config.hpp"
 #include <algorithm>
 #include <map>
 #include <sstream>
@@ -98,7 +99,7 @@ inline bool parseMapPacks(const std::string& text,std::vector<MapPack>& packs,st
             if(f.size()!=8)return bad();
             std::string row="UNIVERSAL";for(std::size_t i=2;i<f.size();++i)row+='|'+f[i];
             std::vector<std::string> errors;auto releases=parseReleases(row,&errors);
-            if(!errors.empty()||releases.size()!=1||releases[0].compressedBytes>1536ULL*1024*1024)return bad();
+            if(!errors.empty()||releases.size()!=1||releases[0].compressedBytes>config::MaxArchiveBytes)return bad();
             auto& p=all[f[1]];auto r=releases[0];
             if(r.kind==ReleaseKind::Full){if(!full.insert(f[1]).second)return bad();p.full=r;}
             else {for(const auto& previous:p.patches)if(previous.fromVersion==r.fromVersion)return bad();p.patches.push_back(r);}

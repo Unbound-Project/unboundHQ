@@ -26,7 +26,7 @@ for version in (a.version, a.from_version):
     if version and not re.fullmatch(r'\d+(?:\.\d+)*(?:[Pp]\d+(?:\.\d+)*)?',version): fail('Use a dotted numeric content version, optionally with P patches.')
 if not a.url.startswith('https://'): fail('A public HTTPS URL is required.')
 size = a.zip.stat().st_size
-if not 0<size<=1536*1024*1024: fail('Map ZIP must be under 1.5 GiB.')
+if not 0<size<=4*1024**3-1: fail('Map ZIP must be at most 4 GiB minus one byte (the FAT32 limit).')
 with zipfile.ZipFile(a.zip) as z:
     if not 0<len(z.infolist())<=4096: fail('ZIP entry count must be between 1 and 4096.')
     expanded=0; seen=set(); files=0
