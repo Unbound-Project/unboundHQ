@@ -19,7 +19,7 @@ inline constexpr const char* AppVersion = "1.0.2";
 #endif
 // Monotonic integer used only by the HQ self-updater. Increment it for every
 // published WUHB, even when the display version is a beta or hotfix label.
-inline constexpr unsigned long long AppReleaseRevision = 61;
+inline constexpr unsigned long long AppReleaseRevision = 62;
 
 // Replace YOUR_GITHUB_NAME and the repository name with your public distribution repository.
 // See server-example/README.md for the recommended GitHub repository and Release layout.
@@ -41,6 +41,7 @@ inline constexpr const char* SdRoot =
 inline constexpr const char* CacheRoot =
     UNBOUND_HQ_SD_ROOT "/cache";
 inline constexpr const char* TesterArchivePath = "fs:/vol/external01/unbound/tester.zip";
+inline constexpr const char* SupplyRunSettingsPath = UNBOUND_HQ_SD_ROOT "/supply-run.txt";
 inline constexpr const char* SdModsRoot =
     "fs:/vol/external01/unbound/content/mods";
 inline constexpr const char* ModLinkDisableFlagPath =

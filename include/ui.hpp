@@ -7,6 +7,7 @@
 #include "touch.hpp"
 #include "background_music.hpp"
 #include "supply_run.hpp"
+#include "supply_run_display.hpp"
 #include "quick_update.hpp"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -60,6 +61,9 @@ public:
     // callbacks. Reuses a static screen texture and a small code-defined pixel atlas.
     void animateDownloadWaiting();
     bool waitingGameActive() const { return downloadAnimationActive_; }
+    bool operationScreenActive() const { return operationScreenActive_; }
+    bool supplyRunEnabled() const { return supplyRunDisplay_.enabled(); }
+    void setSupplyRunEnabled(bool enabled) { supplyRunDisplay_.restore(enabled); }
     void waitingGameInput(std::uint32_t buttons, std::uint32_t held = 0, TouchSample touch = {});
     int modal(const std::string& title, const std::string& body, bool isError = false,
               const std::string& actionLabel = "CONTINUE", int scrollOffset = 0,
@@ -156,6 +160,12 @@ private:
     TouchRect waitingDuckTouch_{};
     SDL_Texture* downloadScreenCache_ = nullptr;
     bool downloadAnimationActive_ = false;
+    SupplyRunDisplay supplyRunDisplay_;
+    bool operationLayoutTransition_ = false;
+    bool operationScreenActive_ = false;
+    std::string operationTitle_, operationDetail_, operationCancelLabel_;
+    int operationProgress_ = -1;
+    bool operationCancellable_ = false;
     std::uint32_t downloadAnimationLastDraw_ = 0;
     // Licensed Lucide PNGs, loaded once and tinted. Supersampled procedural
     // fallbacks keep navigation usable if an optional asset is unavailable.

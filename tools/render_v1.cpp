@@ -135,11 +135,21 @@ int main(int argc,char** argv){
  ui.setNavigation(1,false);
  ui.downloadLoading("Downloading Unbound Core","176 MiB of 420 MiB / 2.1 MiB/s",42,true);
  if(!ui.waitingGameActive()||!capture("download-fullscreen"))return 15;
+ if(!ui.operationScreenActive()||!tap(800,690,TouchActionKind::Button,int(button::X)))return 34;
+ ui.waitingGameInput(button::X);SDL_Delay(320);ui.animateDownloadWaiting();
+ if(ui.waitingGameActive()||!ui.operationScreenActive()||ui.supplyRunEnabled())return 35;
+ if(!tap(960,690,TouchActionKind::Button,int(button::B)))return 36;
+ ui.waitingGameInput(0,button::X);
+ if(ui.supplyRunEnabled())return 37;
+ if(!tap(320,690,TouchActionKind::Button,int(button::X)))return 38;
+ ui.waitingGameInput(button::X);SDL_Delay(320);ui.animateDownloadWaiting();
+ if(!ui.waitingGameActive()||!ui.supplyRunEnabled())return 39;
+
 #ifdef HQ_LAYOUT_PREVIEW
- ui.waitingGameInput(0,0,{true,true,640,690});
+ ui.waitingGameInput(0,0,{true,true,480,690});
  ui.waitingGamePreviewFrame(SDL_GetTicks()+33);
  if(!ui.waitingGamePreviewState().ducking()||!capture("supply-run-touch-duck"))return 32;
- ui.waitingGameInput(0,0,{true,false,640,690});
+ ui.waitingGameInput(0,0,{true,false,480,690});
  if(ui.waitingGamePreviewState().ducking())return 33;
 #endif
  if(!tap(500,490,TouchActionKind::Button,int(button::A)))return 16;
@@ -184,8 +194,25 @@ int main(int argc,char** argv){
      ui.touchAction({true,true,point.first,point.second});
      if(ui.touchAction({true,false,point.first,point.second}))return 18;
  }
- ui.installLoading("Installing Unbound Core","Copying verified files",74);
+ ui.setSupplyRunEnabled(false);
+ ui.installLoading("Installing SD tester ZIP","Copying verified files",74);
+ if(ui.waitingGameActive()||!ui.operationScreenActive())return 47;
+ ui.waitingGameInput(button::X);SDL_Delay(320);ui.animateDownloadWaiting();
+ if(!ui.waitingGameActive())return 48;
+ ui.installLoading("Installing SD tester ZIP","File 23 of 101: zm_tomb.ipak\n1.7 GiB of 4.43 GiB installed\nElapsed 4 min 10 sec  |  About 6 min remaining",74);
  if(!capture("install-fullscreen"))return 19;
+ if(!ui.operationScreenActive()||!tap(1070,690,TouchActionKind::Button,int(button::X)))return 40;
+ ui.waitingGameInput(button::X);
+ SDL_Delay(150);ui.animateDownloadWaiting();
+ if(!capture("install-game-transition"))return 49;
+ SDL_Delay(180);ui.animateDownloadWaiting();
+ if(ui.waitingGameActive()||!ui.operationScreenActive()||ui.supplyRunEnabled())return 41;
+ if(!capture("install-game-hidden"))return 42;
+ if(!tap(640,690,TouchActionKind::Button,int(button::X)))return 43;
+ ui.waitingGameInput(button::X);SDL_Delay(320);ui.animateDownloadWaiting();
+ if(!ui.waitingGameActive()||!ui.operationScreenActive()||!ui.supplyRunEnabled())return 44;
+ if(!capture("install-game-restored"))return 45;
+
  // Noncancellable installation never exposes a Back/Exit touch control.
  ui.touchAction({true,true,1100,690});
  const auto safe=ui.touchAction({true,false,1100,690});
@@ -194,7 +221,9 @@ int main(int argc,char** argv){
  // title contains words such as package, download or install.
  for(const char* title:{"Loading Unbound HQ","Checking map packs","Checking saved package","Loading install settings"}){
      ui.loading(title,"Preparing the requested screen...",40,false);
-     if(ui.waitingGameActive())return 26;
+     if(ui.waitingGameActive()||ui.operationScreenActive())return 26;
+     ui.waitingGameInput(button::X);
+     if(!ui.supplyRunEnabled())return 46;
  }
  if(!capture("normal-loading-centered"))return 27;
  if(tap(500,490,TouchActionKind::Button,int(button::A)))return 28;

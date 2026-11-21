@@ -261,6 +261,7 @@ void Ui::present(){
 }
 void Ui::beginTouch(const std::string& identity){
     if(identity!="loading-cancel"&&identity!="loading-safe")downloadAnimationActive_=false;
+    if(identity!="loading-cancel"&&identity!="loading-safe"&&identity!="loading-normal")operationScreenActive_=false;
     pendingTouchIdentity_=identity;pendingTouchTargets_.clear();suppressedTouchButtons_=0;
 }
 void Ui::touchTarget(SDL_Rect rect,TouchActionKind kind,int value,const SDL_Rect* clip){
@@ -273,6 +274,7 @@ std::optional<TouchAction> Ui::touchAction(const TouchSample& sample){
 }
 void Ui::invalidateTouch(){
     downloadAnimationActive_=false;
+    operationScreenActive_=false;
     tapGesture_.reset();touchTargets_.clear();pendingTouchTargets_.clear();
     touchIdentity_.clear();pendingTouchIdentity_.clear();++touchRevision_;
 }
@@ -693,6 +695,13 @@ void Ui::loadWaitingGame(){
     }
 }
 void Ui::waitingGameInput(std::uint32_t buttons,std::uint32_t held,TouchSample touch){
+    if(operationScreenActive_&&(buttons&button::X)){
+        supplyRunDisplay_.toggle(SDL_GetTicks());
+        supplyRun_.setDucking(false);
+        drawLoading(operationTitle_,operationDetail_,operationProgress_,operationCancellable_,
+                    operationCancelLabel_.c_str(),true);
+        return;
+    }
     if(!downloadAnimationActive_)return;
     const bool touchDuck=touch.valid&&touch.touching&&waitingDuckTouch_.contains(touch.x,touch.y);
     supplyRun_.setDucking(((buttons|held)&button::Down)||touchDuck);
@@ -764,11 +773,15 @@ void Ui::drawWaitingGame(std::uint32_t now){
     }
 }
 void Ui::animateDownloadWaiting(){
-    if(!downloadAnimationActive_||!downloadScreenCache_||
-       (touchIdentity_!="loading-cancel"&&touchIdentity_!="loading-safe"))return;
+    if(!operationScreenActive_)return;
     const auto now=SDL_GetTicks();
     if(now-downloadAnimationLastDraw_<33)return;
-    renderWaitingGameFrame(now);
+    if(operationLayoutTransition_){
+        drawLoading(operationTitle_,operationDetail_,operationProgress_,operationCancellable_,
+                    operationCancelLabel_.c_str(),true);
+        return;
+    }
+    if(downloadAnimationActive_&&downloadScreenCache_)renderWaitingGameFrame(now);
 }
 void Ui::renderWaitingGameFrame(std::uint32_t now){
     if(!downloadAnimationActive_||!downloadScreenCache_)return;
@@ -788,13 +801,26 @@ void Ui::downloadLoading(const std::string& title,const std::string& detail,int 
 void Ui::installLoading(const std::string& title,const std::string& detail,int progress){
     drawLoading(title,detail,progress,false,"",true);
 }
-void Ui::drawLoading(const std::string& rawTitle,const std::string& rawDetail,int progress,bool cancellable,const char* cancelLabel,bool miniGame){
+void Ui::drawLoading(const std::string& rawTitle,const std::string& rawDetail,int progress,
+                     bool cancellable,const char* cancelLabel,bool miniGame){
     const auto friendly=installProgressFeedback(rawTitle,rawDetail);
-    const bool game=miniGame&&waitingAtlas_&&downloadScreenCache_;
+    operationScreenActive_=miniGame;
+    if(miniGame){
+        operationTitle_=rawTitle;
+        operationDetail_=rawDetail;
+        operationProgress_=progress;
+        operationCancellable_=cancellable;
+        operationCancelLabel_=cancelLabel;
+    }
     const auto now=SDL_GetTicks();
-    if(game&&!downloadAnimationActive_)supplyRun_.resume(now);
-    pump();beginTouch(game?(cancellable?"loading-cancel":"loading-safe"):"loading-normal");
-    const bool cached=game&&SDL_SetRenderTarget(renderer_,downloadScreenCache_)==0;
+    operationLayoutTransition_=miniGame&&supplyRunDisplay_.transitioning(now);
+    const bool playable=miniGame&&waitingAtlas_&&downloadScreenCache_;
+    const float gameAmount=playable?supplyRunDisplay_.amount(now):0.0f;
+    const bool cached=playable&&gameAmount>=1.0f&&!operationLayoutTransition_&&
+                      SDL_SetRenderTarget(renderer_,downloadScreenCache_)==0;
+    if(gameAmount>0&&!downloadAnimationActive_)supplyRun_.resume(now);
+    pump();
+    beginTouch(miniGame?(cancellable?"loading-cancel":"loading-safe"):"loading-normal");
     backdrop();
     const SDL_Rect mark{26,4,94,94};
     SDL_RenderCopy(renderer_,logo_,nullptr,&mark);
@@ -803,22 +829,20 @@ void Ui::drawLoading(const std::string& rawTitle,const std::string& rawDetail,in
     text(regular18_,build,W-32-measure(regular18_,build).first,38,Muted);
     SDL_SetRenderDrawColor(renderer_,43,49,53,255);
     SDL_RenderDrawLine(renderer_,32,100,1248,100);
-    if(!game){
+    const int shown=std::clamp(progress,0,100);
+    if(!miniGame){
         text(bold28_,friendly.title,W/2,273,White,1120,true);
-        const int shown=std::clamp(progress,0,100);
         roundRect({256,354,768,12},5,raisedColor());
         if(progress>=0&&shown)roundRect({256,354,std::max(12,768*shown/100),12},5,accentColor());
         text(bold28_,progress<0?"Please wait...":std::to_string(shown)+"%",W/2,385,White,1008,true);
-        wrapped(regular18_,friendly.message,{256,443,768,134},LightText);
+        wrapped(regular18_,friendly.message,{256,443,768,182},LightText);
         if(cancellable)footer({{"B",cancelLabel}});
         else footer({});
-        present();return;
+        downloadAnimationActive_=false;
+        present();
+        return;
     }
-    text(bold28_,friendly.title,64,122,White,1152);
-    const int shown=std::clamp(progress,0,100);
-    roundRect({64,185,1058,12},5,raisedColor());
-    if(progress>=0&&shown)roundRect({64,185,std::max(12,1058*shown/100),12},5,accentColor());
-    text(bold28_,progress<0?"—":std::to_string(shown)+"%",1140,168,White,88);
+
     std::string detailMessage,elapsed,waitNotice,line;
     std::istringstream detailLines(friendly.message);
     while(std::getline(detailLines,line)){
@@ -827,9 +851,10 @@ void Ui::drawLoading(const std::string& rawTitle,const std::string& rawDetail,in
         if(!detailMessage.empty())detailMessage+="  |  ";
         detailMessage+=line;
     }
-    wrapped(regular18_,detailMessage,{64,211,1152,48},LightText);
-    if(!waitNotice.empty())text(regular18_,waitNotice,64,260,Muted,1152);
-    if(game){
+
+    // Only a visibility change redraws these full frames. Normal gameplay
+    // keeps the existing cached background and bounded 30 Hz sprite updates.
+    if(gameAmount>0){
         SDL_SetRenderDrawColor(renderer_,43,49,53,255);
         SDL_RenderDrawLine(renderer_,64,287,1216,287);
         text(bold20_,"SUPPLY RUN",64,300,accentColor(),400);
@@ -838,24 +863,49 @@ void Ui::drawLoading(const std::string& rawTitle,const std::string& rawDetail,in
         text(regular22_,"Jump: A / Up or tap. Duck: hold Down or the Duck button.",W/2,581,White,1152,true);
         text(regular18_,(elapsed.empty()?std::string{}:elapsed+"  |  ")+"Setup continues while you play.",
              W/2,618,Muted,1152,true);
-        touchTarget({64,336,1152,280},TouchActionKind::Button,int(button::A));
-        if(cancellable)footer({{"A/UP","Jump"},{"DOWN","Hold to duck"},{"B",cancelLabel}});
-        else footer({{"A/UP","Jump"},{"DOWN","Hold to duck"}});
-        const int columnWidth=W/(cancellable?3:2);
+        if(!cached)drawWaitingGame(now);
+        if(gameAmount<1.0f){
+            const auto shade=darkColor();
+            SDL_SetRenderDrawColor(renderer_,shade.r,shade.g,shade.b,
+                                   static_cast<Uint8>(std::lround(255*(1.0f-gameAmount))));
+            const SDL_Rect fade{32,287,1216,371};
+            SDL_RenderFillRect(renderer_,&fade);
+        }
+    }
+
+    const float hidden=1.0f-gameAmount;
+    const auto move=[hidden](int game,int centered){
+        return int(std::lround(game+(centered-game)*hidden));
+    };
+    const int titleWidth=std::min(measure(bold28_,friendly.title).first,1120);
+    text(bold28_,friendly.title,move(64,(W-titleWidth)/2),move(122,273),White,1120);
+    const SDL_Rect bar{move(64,256),move(185,354),move(1058,768),12};
+    roundRect(bar,5,raisedColor());
+    if(progress>=0&&shown)roundRect({bar.x,bar.y,std::max(12,bar.w*shown/100),bar.h},5,accentColor());
+    const std::string percent=progress<0?(hidden>.5f?"Please wait...":"—"):std::to_string(shown)+"%";
+    const int percentWidth=measure(bold28_,percent).first;
+    text(bold28_,percent,move(1140,(W-percentWidth)/2),move(168,385),White,move(88,1008));
+    const SDL_Rect detailBox{move(64,256),move(211,443),move(1152,768),move(48,182)};
+    wrapped(regular18_,hidden>.5f?friendly.message:detailMessage,detailBox,LightText);
+    if(!waitNotice.empty()&&gameAmount>.5f)text(regular18_,waitNotice,64,260,Muted,1152);
+
+    if(supplyRunDisplay_.enabled()&&playable){
+        if(gameAmount>.95f)touchTarget({64,336,1152,280},TouchActionKind::Button,int(button::A));
+        if(cancellable)footer({{"A/UP","Jump"},{"DOWN","Hold to duck"},{"X/1","Hide game"},{"B",cancelLabel}});
+        else footer({{"A/UP","Jump"},{"DOWN","Hold to duck"},{"X/1","Hide game"}});
+        const int columnWidth=W/(cancellable?4:3);
         waitingDuckTouch_={columnWidth+8,663,columnWidth-16,52};
     }else{
-        const SDL_Rect markLarge{W/2-70,340,140,140};
-        SDL_RenderCopy(renderer_,logo_,nullptr,&markLarge);
-        footer({});
-        text(regular18_,"Operation in progress. Keep the console on.",W/2,679,Muted,1160,true);
+        if(cancellable)footer({{"X/1","Show Supply Run"},{"B",cancelLabel}});
+        else footer({{"X/1","Show Supply Run"}});
     }
     if(cached){
         SDL_SetRenderTarget(renderer_,nullptr);
         SDL_RenderCopy(renderer_,downloadScreenCache_,nullptr,nullptr);
     }
-    downloadAnimationActive_=game&&cached;
+    downloadAnimationActive_=cached;
     downloadAnimationLastDraw_=now;
-    if(game)drawWaitingGame(now);
+    if(cached)drawWaitingGame(now);
     present();
 }
 int Ui::modal(const std::string& title,const std::string& body,bool isError,

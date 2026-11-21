@@ -1,10 +1,27 @@
 #include "supply_run.hpp"
+#include "supply_run_display.hpp"
+#include <cmath>
 #include <cassert>
 #include <iostream>
 
 using unbound::SupplyRun;
 
 int main(){
+    unbound::SupplyRunDisplay display;
+    assert(display.enabled()&&display.amount(0)==1.0f);
+    display.toggle(100);
+    assert(!display.enabled()&&display.amount(100)==1.0f);
+    assert(std::fabs(display.amount(250)-.5f)<.0001f);
+    display.toggle(250);
+    assert(display.enabled()&&std::fabs(display.amount(250)-.5f)<.0001f);
+    assert(display.amount(400)>.5f&&display.amount(400)<1);
+    assert(display.amount(550)==1&&!display.transitioning(550));
+    display.restore(false);
+    assert(!display.enabled()&&display.amount(1000)==0);
+    display.toggle(0xfffffff0u);
+    assert(display.transitioning(20)&&display.amount(20)>0&&display.amount(20)<1);
+    assert(display.amount(0xfffffff0u+300u)==1);
+
     SupplyRun game;
     unsigned now=0;
     game.queueJump();game.update(now+=33);

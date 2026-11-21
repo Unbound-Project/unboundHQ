@@ -94,7 +94,13 @@ AppInput readUiInput(Ui& ui,std::optional<TouchAction>* selectedAction=nullptr){
         else if(selectedAction)*selectedAction=action;
     }
     input.buttons=dismissBeforeActivate(input.buttons);
+    const bool supplyRunWasEnabled=ui.supplyRunEnabled();
     ui.waitingGameInput(input.buttons,input.held,input.touch);
+    if(ui.supplyRunEnabled()!=supplyRunWasEnabled){
+        std::string saveError;
+        if(!writeTextFileAtomic(config::SupplyRunSettingsPath,ui.supplyRunEnabled()?"on\n":"off\n",saveError))
+            lastSessionError="Supply Run preference could not be saved: "+saveError;
+    }
     return input;
 }
 
@@ -1303,7 +1309,10 @@ std::uint64_t runSdDiagnostic(Ui& ui,const ProgressCallback& progress){
     if(!confirmAction(ui,"Install SD test update?",summary,"INSTALL TEST ZIP"))return 0;
 
     const auto began=SDL_GetTicks();
-    const bool installed=installDiagnosticArchive(archive,install,error,progress);
+    const ProgressCallback installProgress=[&ui](const std::string& title,const std::string& detail,int percent){
+        ui.installLoading(title,detail,percent);
+    };
+    const bool installed=installDiagnosticArchive(archive,install,error,installProgress);
     const auto elapsed=(SDL_GetTicks()-began)/1000;
     std::string report="UNBOUND HQ SD TEST\nApp: "+std::string(config::AppVersion)+
         "\nZIP: sd:/unbound/testing/update.zip\nCompressed bytes: "+std::to_string(archive.compressedBytes)+
@@ -1353,8 +1362,12 @@ int main(){
     }
     ProgressCallback startup=[&ui](const std::string& title,const std::string& detail,int percent){ui.loading(title,detail,percent);};
     if(!initializePlatform(error,startup)){waitModal(ui,"Startup error",error,true);shutdownPlatform();ui.shutdown();WHBLogCafeDeinit();shutdownInput();WHBProcShutdown();return 1;}
+    std::string supplyRunPreference,supplyRunPreferenceError;
+    if(readInstallState(config::SupplyRunSettingsPath,supplyRunPreference,supplyRunPreferenceError))
+        ui.setSupplyRunEnabled(trim(supplyRunPreference)!="off");
+    else lastSessionError="Supply Run preference could not be read: "+supplyRunPreferenceError;
     setOperationFrameCallback([&ui]{
-        if(ui.waitingGameActive()){
+        if(ui.operationScreenActive()){
             readUiInput(ui);
             ui.animateDownloadWaiting();
         }
@@ -1567,7 +1580,7 @@ int main(){
             "\nLanguage: "+install.languageFolder+
             "\n\nInstalls this ZIP without a release-feed hash check. Only install files supplied by your tester coordinator. Test content is marked 0.0.0, not as an official release. Press B to skip.","INSTALL TEST")){
             testerAttempted=true;
-            ProgressCallback testProgress=[&ui](const std::string& title,const std::string& detail,int percent){ui.loading(title,detail,percent);};
+            ProgressCallback testProgress=[&ui](const std::string& title,const std::string& detail,int percent){ui.installLoading(title,detail,percent);};
             std::string testError;
             testerFailed=!installTesterArchive(install,testError,testProgress);
             install.modVersion="0.0.0";
