@@ -1,57 +1,139 @@
 # Unbound HQ
 
-Unbound HQ is an Aroma Wii U application for Call of Duty: Black Ops II and Call of Duty: Ghosts. This repository contains the v1.0.0 / r56 application source, runtime assets, tests, and development tools.
+**Unbound HQ v1.5** is an Aroma Wii U app for **Call of Duty: Black Ops II** and **Call of Duty: Ghosts**. Switch games, install and update Unbound, browse Workshop content, manage mods and plugins, and check UNC activity from one app.
 
-The app switches between games, detects regional game and official-update installations, installs verified Core packages and optional map packs to USB or internal storage, manages mods and Aroma Workshop plugins, and shows network activity and release news. ZIPs on SD can be used as installation sources.
+[Download the latest Wii U release](https://github.com/tonytrawl/bo2-unbound/releases/latest) · [UNC Online](https://unc-bo2.fun/) · [Package layout](docs/package-layout.txt)
 
-HQ installs at sd:/wiiu/apps/Unbound-HQ/Unbound-HQ.wuhb. It migrates the earlier BO2-Unbound-HQ app name and carries saved settings and install records to the current folder.
+This repository contains the Wii U source, build assets, host tests and development tools. The current application revision is **r66**.
+
+## Install HQ
+
+Download the SD ZIP from the latest release, extract its `wiiu` folder to the root of your SD card, merge folders, and launch **Unbound HQ** through Aroma.
+
+The app belongs at `sd:/wiiu/apps/Unbound-HQ/Unbound-HQ.wuhb`. HQ migrates the earlier BO2 app name and preserves its settings and install records.
+
+You need Aroma and a supported copy of the selected game with its official update installed:
+
+| Game | Official update |
+| --- | --- |
+| Black Ops II — USA / Europe | v128 |
+| Black Ops II — Japan | v96 or newer |
+| Call of Duty: Ghosts | v112 |
+
+HQ detects regional titles, language folders and game storage. Official Core and map-pack game files install to the selected game's **USB or internal NAND update**. An SD card can supply the ZIP instead of downloading it.
+
+## What's in v1.5
+
+- **One update confirmation:** installed Core and map-pack updates appear together with download sizes and estimated download/install times. Choose **Update all** or **Not now**. The initial install picker stays available for new installations and optional content.
+- **Four Workshop tabs:** Plugins, Custom Maps, Mods and Custom Packages.
+- **Local ZIP browsing:** choose a custom package from your SD folders, review its destinations and install it.
+- **Support ZIP export:** save HQ diagnostics and Wii U crash logs together for bug reports.
+- **Supply Run:** the optional installation minigame works during downloads and SD installs. Turn it off to see the centered progress bar and extra details.
+
+Time estimates learn from successful downloads and installs. Initial estimates are labeled until HQ has measurements for your console.
+
+## Workshop
+
+| Tab | What it does |
+| --- | --- |
+| **Plugins** | Install, repair and manage Aroma plugins and their update preferences. |
+| **Custom Maps** | Browse community maps from the selected game's custom-map catalog. |
+| **Mods** | Install, update or reinstall mods from the selected game's mod catalog. |
+| **Custom Packages** | Browse SD folders and install a ZIP you selected yourself. |
+
+Custom Maps and Mods each have separate BO2 and Ghosts manifests, cached for offline browsing:
+
+| Catalog | Black Ops II | Ghosts |
+| --- | --- | --- |
+| Custom Maps | [custom-maps.txt](https://downloads.unc-bo2.fun/custom-maps.txt) | [ghosts/custom-maps.txt](https://downloads.unc-bo2.fun/ghosts/custom-maps.txt) |
+| Mods | [mods.txt](https://downloads.unc-bo2.fun/mods.txt) | [ghosts/mods.txt](https://downloads.unc-bo2.fun/ghosts/mods.txt) |
+
+Entries use stable IDs, full ZIPs and optional patches. HQ verifies SHA-256 and exact size before installation, tracks installed versions and offers a full reinstall without downgrading newer content. Mods use `mod-` IDs; Custom Maps use `custom-` IDs.
+
+## ZIP package layout
+
+```text
+release.zip
+  update/
+    code/...
+    content/...
+  sd/
+    mods/example-mod/...
+```
+
+Either root can be omitted. Put `update` and `sd` directly inside the ZIP, without an extra enclosing folder.
+
+| ZIP root | Destination |
+| --- | --- |
+| `update/` | The selected regional game's update on USB / NAND |
+| `sd/` — Black Ops II | `sd:/unbound/content/` |
+| `sd/` — Ghosts | `sd:/unbound-ghosts/content/` |
+
+For example, `sd/mods/example/script.gsc` becomes `<game SD content>/mods/example/script.gsc`. Do not add another `content` folder beneath `sd`.
+
+Custom Packages can browse from the SD root. Optional starting folders are `sd:/unbound/packages/` and `sd:/unbound-ghosts/packages/`. The original ZIP is retained. A local custom package does not claim an official release version; use **Install / Update** for official Core/map-pack packages and their version records.
+
+ZIP **Store** and **Deflate** are supported. Limits are **4 GiB minus one byte** per archive, **2 GiB** per file and **5 GiB** expanded. Map packs keep their content-only console rules; Mods and Custom Packages can include mod-specific code. See [package-layout.txt](docs/package-layout.txt).
+
+## Export a support report
+
+Open **Support → Export ZIP** to save `sd:/wiiu/apps/Unbound-HQ/support-report.zip`.
+
+The ZIP includes the current HQ diagnostics, available performance/install logs and native folder census, plus regular files copied from `/storage_slc/sys/logs/` on the Wii U. This includes the `.log` and `.dsc` records used to investigate DSI exceptions.
+
+`export-summary.txt` lists included files and any unavailable or skipped logs. Original console logs stay in place. HQ also keeps the individual `diagnostics.txt` report. Export runs only when requested and saves locally for you to share. See [support-export.txt](docs/support-export.txt).
 
 ## Build
 
-The Dockerfile pins the Wii U toolchain and the libmocha and librpxloader artifacts used by HQ.
+The Dockerfile specifies the devkitPro image version and pinned libmocha/librpxloader artifacts used by HQ.
 
 ```sh
+git clone https://github.com/Unbound-Project/unboundHQ.git
+cd unboundHQ
 docker build -t unbound-hq-builder .
-docker run --rm -v "$PWD:/project" unbound-hq-builder make -j6
+docker run --rm -v "${PWD}:/project" unbound-hq-builder make -j6
 ```
 
-The build produces Unbound-HQ.wuhb at the repository root. Copy it to wiiu/apps/Unbound-HQ/ on the SD card and open it through Aroma.
+The build produces `Unbound-HQ.wuhb` at the repository root. Copy it to `wiiu/apps/Unbound-HQ/` on the SD card.
 
-With devkitPro, wiiu-dev, wiiu-portlibs, libmocha, and librpxloader installed locally, run make directly. Python 3 is used by the asset preparation and publishing tools. The committed content and data directories supply the assets required by the normal build.
+For a local toolchain, install devkitPro's `wiiu-dev` and `wiiu-portlibs`, libmocha and librpxloader, then run `make`. Python 3 prepares runtime content. The committed `content/` and `data/` directories provide the build assets.
 
 ## Verify
 
-On a Linux host with a C++20 compiler, SDL2 development libraries, and pkg-config, run the host regression suite.
+With the devkitPro build environment available, the host suites also require a native C++20 compiler, Python 3, pkg-config, SDL2/SDL2_image/SDL2_ttf, libzip and libcurl development libraries:
 
 ```sh
 make test
+make test-zip
+make test-curl
 python3 tests/install_flow_source_tests.py
 python3 tests/sd_package_flow_tests.py
 python3 tests/map_publisher_tests.py
 ```
 
-The optional download_animation_assets_tests.py takes the directory of original GIF files as its required argument and uses Pillow to compare them with the committed animation atlases.
+The suites cover release planning, regional routing, ZIP integrity, interrupted installs, update selection, Workshop catalogs and support ZIPs. The support-export integration test verifies a 201-file crash-log fixture, unchanged source logs and retention of the previous ZIP after a failed export.
 
-Additional ZIP and curl integration checks are available through make test-zip and make test-curl with their required development libraries installed.
+`tools/render_v1.cpp` renders the actual SDL UI with fixture data for layout and touch-control checks. Use a Wii U for final hardware testing.
 
-r56's Ghosts USB launch handoff was verified on a Wii U. Disc and regional discovery also have host regression coverage. An interrupted game-content install must finish through HQ's repair flow before the game is launched.
+## Publish content catalogs
+
+HQ binaries stay on [GitHub Releases](https://github.com/tonytrawl/bo2-unbound/releases). Core/map-pack manifests, Workshop catalogs and news are hosted at `downloads.unc-bo2.fun`. Endpoints and revision are defined in [include/config.hpp](include/config.hpp).
+
+[tools/publish_map_catalog.py](tools/publish_map_catalog.py) validates ZIP paths, CRCs, hashes and sizes and writes catalog entries. Default mode writes map-pack entries; `--custom` selects Custom Maps and `--mods` selects Mods. `--from-version` adds a patch to the current full release.
+
+Templates: [Custom Maps](server-example/custom-maps.txt) · [Mods](server-example/mods.txt).
+
+Upload the final versioned ZIP first, verify its public download, and publish the manifest last. Its size and SHA-256 must describe the complete ZIP users receive.
 
 ## Source layout
 
-- source and include contain the application and shared model.
-- content contains fonts, branding, audio, animations, and other runtime assets.
-- data contains embedded binary resources, including the HTTPS trust bundle.
-- tests contains host tests and platform substitutes.
-- tools contains packaging, publishing, preview, and asset preparation utilities.
-- server-example contains example release feeds and publishing documentation.
-- docs/implementation-history.md preserves earlier development notes.
-
-## Distribution
-
-HQ binaries are published at https://github.com/tonytrawl/bo2-unbound/releases. The app reads release manifests and news from https://downloads.unc-bo2.fun/. Default endpoints and the app revision are defined in include/config.hpp.
-
-Game content packages use SHA-256 and size records in the manifest. Upload a versioned package before publishing its manifest entry. The installer accepts Core payloads under update/code and update/content and writes the installed version marker after the package completes.
+- `source/`, `include/` — application and shared model.
+- `content/`, `data/` — runtime assets and embedded resources.
+- `tests/` — host regression and integration tests.
+- `tools/` — publishing, packaging, previews and asset preparation.
+- `server-example/` — catalog templates and feed documentation.
+- `docs/` — package/support-export details and implementation history.
 
 ## License
 
-Application source uses the existing MIT license in LICENSE. Bundled fonts, icons, and other third-party assets retain their accompanying license and attribution files.
+Application source is available under the [MIT license](LICENSE). Bundled fonts, icons and other third-party assets retain their accompanying licenses and attribution files.

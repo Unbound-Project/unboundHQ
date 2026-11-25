@@ -92,6 +92,9 @@ test:
 	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/custom_maps_tests.cpp source/model.cpp -o custom_maps_tests
 	@./custom_maps_tests
 	@rm -f custom_maps_tests
+	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/package_layout_tests.cpp source/model.cpp -o package_layout_tests
+	@./package_layout_tests
+	@rm -f package_layout_tests
 	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/network_tests.cpp source/network_schema.cpp $$(pkg-config --cflags --libs sdl2) -o network_tests
 	@./network_tests
 	@rm -f network_tests
@@ -218,6 +221,12 @@ test:
 	@./install_discovery_tests
 	@rm -f install_discovery_tests
 test-zip:
+	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -Iinclude -Isource tests/support_archive_tests.cpp source/model.cpp -lzip -o support_archive_tests
+	@./support_archive_tests
+	@rm -f support_archive_tests
+	@c++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread -Itests/fake_sdl -Iinclude -Isource tests/mixed_package_zip_tests.cpp source/model.cpp source/sha256.cpp -lzip -o mixed_package_zip_tests
+	@python3 tests/mixed_package_zip_tests.py
+	@rm -f mixed_package_zip_tests
 	@c++ -std=c++20 -Wall -Wextra -Werror -pthread -Itests/fake_sdl -Iinclude -Isource tests/buffered_zip_tests.cpp source/sha256.cpp -lzip -o buffered_zip_tests
 	@./buffered_zip_tests
 	@rm -f buffered_zip_tests

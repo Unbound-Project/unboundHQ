@@ -20,6 +20,8 @@
 #include "install_feedback.hpp"
 #include "inherited_repair_gate.hpp"
 #include "custom_maps.hpp"
+#include "local_package_state.hpp"
+#include "update_estimates.hpp"
 
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
@@ -80,6 +82,9 @@ std::string recoveryWarning;
 bool downloadWasCancelled=false;
 bool pluginRestartRequired=false;
 bool mapRepairPending=false;
+bool localPackageRepairPending=false;
+LocalPackagePending localPackagePending;
+std::string localPackageWarning;
 bool retiredPluginRestartRequired=false;
 std::string sdCoreVersion;
 InheritedRepairGate inheritedRepairGate;
@@ -123,13 +128,21 @@ void refreshRecovery(bool allowWrites=false){
     recoveryWarning.clear();
     recoveryStatus=loadCoreRecovery(recoveryRecord,recoveryWarning,allowWrites);
 }
+std::string localPackageStatePath(){return std::string(config::gameStateRoot())+"/local-package-install.txt";}
+void refreshLocalPackageRecovery(){
+    std::string text;localPackageWarning.clear();localPackagePending={};
+    if(!readInstallState(localPackageStatePath(),text,localPackageWarning))localPackageRepairPending=true;
+    else if(text.empty())localPackageRepairPending=false;
+    else{localPackageRepairPending=true;parseLocalPackageJournal(text,localPackagePending,localPackageWarning);}
+}
 
 bool repairNeeded(){
-    return mapRepairPending||inheritedRepairGate.blocked()||recoveryStatus==CoreRecoveryLoadStatus::Invalid||
+    return localPackageRepairPending||mapRepairPending||inheritedRepairGate.blocked()||recoveryStatus==CoreRecoveryLoadStatus::Invalid||
         (recoveryStatus==CoreRecoveryLoadStatus::Pending&&coreRecoveryNeedsRepair(recoveryRecord));
 }
 
 std::string unfinishedSummary(){
+    if(localPackageRepairPending)return "A custom package needs to finish. Open Workshop > Custom Packages and retry its original ZIP.";
     if(mapRepairPending)return "A map pack needs to finish installing. Open Install / Update to resume.";
     if(inheritedRepairGate.blocked())return "Original game files need restoration. Open Install / Update before launching the game.";
     if(recoveryStatus==CoreRecoveryLoadStatus::Invalid)return "The saved install record needs attention. Open Install / Update for details.";
@@ -809,7 +822,7 @@ bool installCoreStep(Ui& ui,GameInstall& install,const Release& release,std::siz
         if(checked==PackageVerificationStatus::Valid){archive=candidate;break;}
         if(checked==PackageVerificationStatus::Cancelled){downloadWasCancelled=true;return false;}
         if(checked==PackageVerificationStatus::MetadataMismatch)return false;
-        if(!confirmAction(ui,"SD package could not be used",
+        if(!automaticLocalSource&&!confirmAction(ui,"SD package could not be used",
             "The ZIP is incomplete, unreadable, or does not match this release. Your file was left unchanged.\n\nUse the saved download or download a verified copy from the internet?","USE INTERNET",true)){
             downloadWasCancelled=true;return false;
         }
@@ -885,6 +898,11 @@ enum class InstallMenuResult { Back, Exit, Completed };
 InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automatic,
                                 InstallPreferences& saved,const std::vector<Release>& releases,
                                 bool contentAllowed,bool& settingsValid,int* requestedSection=nullptr){
+    if(localPackageRepairPending){
+        waitModal(ui,"Finish the custom package","Open Workshop > Custom Packages and retry the original ZIP before installing other content.",true);
+        if(requestedSection)*requestedSection=2;
+        return InstallMenuResult::Back;
+    }
     TouchBoundary boundary(ui);
     if(requestedSection)*requestedSection=-1;
     std::vector<InstallOption> options;
@@ -1244,6 +1262,7 @@ InstallMenuResult runInstallMenu(Ui& ui,GameInstall& install,GameInstall& automa
 }
 
 #include "quick_update_flow.hpp"
+#include "local_package_flow.hpp"
 
 #ifdef UNBOUND_DIAGNOSTIC_SD
 // A separate, local-only entry point. Do not run the public self-updater,
@@ -1419,7 +1438,7 @@ int main(){
         sessionMapCatalogLoaded=false;
         sessionMapCatalog.clear();
         sessionMapNotice.clear();
-        sessionCustomMapsLoaded=false;sessionCustomMaps.clear();sessionCustomMapsNotice.clear();
+        sessionCustomMaps={};sessionMods={};
         bool releasesChanged=false,changesChanged=false,downloadedArtwork=false;
         install={};
         install.game=config::activeGame;
@@ -1440,6 +1459,11 @@ int main(){
         }
         addStartupNotice("INSTALL DESTINATION",installSettingsWarning);
         refreshRecovery(contentUpdatesAllowed);
+        refreshLocalPackageRecovery();
+        if(localPackageRepairPending){
+            addStartupNotice("CUSTOM PACKAGE",localPackageWarning.empty()?"An SD ZIP installation needs to finish. Open Workshop > Custom Packages to resume.":localPackageWarning);
+            startupNeedsAttention=true;
+        }
         if(!config::ghostsMode()&&install.sku&&install.update.present){
             refreshInheritedRepair(ui,install);
             if(inheritedRepairGate.blocked()&&contentUpdatesAllowed){
@@ -1486,7 +1510,7 @@ int main(){
         ui.loading(newsUpdated?"Updating What's New":"Opening Unbound HQ",newsUpdated?"Building the updated What's New display...":"Preparing the unchanged What's New display...",95);ui.prepareNews(changes);
         addStartupNotice("NETWORK AND RELEASES",networkWarning);
         if(releases.empty())startupNeedsAttention=true;
-        availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
+        availableMapUpdates=contentUpdatesAllowed?installedMapUpdateCount(ui,install):0;
     };
     std::string retirementReminder,retirementError;
     const auto retirementPath=std::string(config::SdRoot)+"/state/retirement-restart.txt";
@@ -1599,7 +1623,7 @@ int main(){
         const auto latest=latestReleaseVersion(releases,install.sku);
         const auto plan=selectedInstallPlan(releases,install,installPreferences.languageInstallPending);
         const bool behind=!latest.empty()&&(install.modVersion=="Not installed"||compareVersions(install.modVersion,latest)<0);
-        const unsigned mapUpdates=selectedMapUpdateCount(ui,install);
+        const unsigned mapUpdates=installedMapUpdateCount(ui,install);
         if(shouldOpenQuickUpdates(install,installPreferences,releases,mapUpdates,installSettingsLoaded,contentUpdatesAllowed,repairNeeded()))reviewInstallOnStartup=true;
         else if((!plan.empty()||mapUpdates)&&confirmAction(ui,installPreferences.languageInstallPending?"Language installation unfinished":"Unbound installation available",
             "Installed: "+install.modVersion+"\nNewest: "+latest+"\nDestination: "+deviceName(install.update.device)+
@@ -1616,9 +1640,6 @@ int main(){
     std::uint32_t globeFrame=0;
     Screen screen=Screen::Home;int detailAction=0,catalogScroll=0,detailScroll=0,newsScroll=0,newsScrollTarget=0,localScroll=0;
     WorkshopTab workshopTab=WorkshopTab::Plugins;
-    std::size_t customSelected=0;int customScroll=0,customScrollTarget=0;
-    std::vector<std::string> customVersions;
-    bool customMapStatusDirty=true;
     DashboardNavigation dashboard;
     int pendingSection=-1;
     int catalogScrollTarget=0,detailScrollTarget=0,localScrollTarget=0,localDetailsScroll=0,localDetailsScrollTarget=0;
@@ -1741,7 +1762,7 @@ int main(){
     if(reviewInstallOnStartup){
         const auto result=openContentMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
         if(result==InstallMenuResult::Exit)exitRequested=true;
-        availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
+        availableMapUpdates=contentUpdatesAllowed?installedMapUpdateCount(ui,install):0;
         dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1);
     }
     const auto switchGame=[&](Game game){
@@ -1763,7 +1784,7 @@ int main(){
             networkFeed.pause();
             const auto result=openContentMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
             if(result==InstallMenuResult::Exit)exitRequested=true;
-            availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
+            availableMapUpdates=contentUpdatesAllowed?installedMapUpdateCount(ui,install):0;
             dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1);
         }
         redraw=true;
@@ -1799,17 +1820,17 @@ int main(){
                 localSelected=static_cast<std::size_t>(touch->value);
                 localDetailsScroll=0;localDetailsScrollTarget=0;redraw=true;
             }else if(screen==Screen::Catalog&&touch->kind==TouchActionKind::WorkshopTab&&
-                     touch->value>=0&&touch->value<=1&&!(b&(button::B|button::L))){
-                workshopTab=touch->value==0?WorkshopTab::Plugins:WorkshopTab::CustomMaps;
+                     touch->value>=0&&touch->value<=int(WorkshopTab::CustomPackages)&&!(b&(button::B|button::L))){
+                workshopTab=static_cast<WorkshopTab>(touch->value);
                 b=0;redraw=true;
-            }else if(screen==Screen::Catalog&&workshopTab==WorkshopTab::CustomMaps&&
+            }else if(screen==Screen::Catalog&&isWorkshopContentTab(workshopTab)&&
                      touch->kind==TouchActionKind::CustomMapRow&&touch->value>=0&&
-                     static_cast<std::size_t>(touch->value)<sessionCustomMaps.size()){
-                customSelected=static_cast<std::size_t>(touch->value);b=0;redraw=true;
-            }else if(screen==Screen::Catalog&&workshopTab==WorkshopTab::CustomMaps&&
+                     static_cast<std::size_t>(touch->value)<workshopContentCatalog(workshopTab).items.size()){
+                workshopContentCatalog(workshopTab).selected=static_cast<std::size_t>(touch->value);b=0;redraw=true;
+            }else if(screen==Screen::Catalog&&isWorkshopContentTab(workshopTab)&&
                      touch->kind==TouchActionKind::CustomMapAction&&touch->value>=0&&
-                     static_cast<std::size_t>(touch->value)<sessionCustomMaps.size()){
-                customSelected=static_cast<std::size_t>(touch->value);b=button::A;redraw=true;
+                     static_cast<std::size_t>(touch->value)<workshopContentCatalog(workshopTab).items.size()){
+                workshopContentCatalog(workshopTab).selected=static_cast<std::size_t>(touch->value);b=button::A;redraw=true;
             }else if(screen==Screen::Catalog&&workshopTab==WorkshopTab::Plugins&&touch->kind==TouchActionKind::PluginRow&&
                      touch->value>=0&&static_cast<std::size_t>(touch->value)<pluginRuntimes.size()){
                 selected=static_cast<std::size_t>(touch->value);b=button::A;redraw=true;
@@ -1838,16 +1859,18 @@ int main(){
                 else if(homeAction==1){
                     const auto result=openContentMenu(ui,install,automaticInstall,installPreferences,releases,contentUpdatesAllowed,installSettingsLoaded,&pendingSection);
                     if(result==InstallMenuResult::Exit)exitRequested=true;
-                    availableMapUpdates=contentUpdatesAllowed?selectedMapUpdateCount(ui,install):0;
+                    availableMapUpdates=contentUpdatesAllowed?installedMapUpdateCount(ui,install):0;
                     dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1);redraw=true;
                 }
                 else if(homeAction==2){
                     std::string workshopWarning;
-                    if(openWorkshop(ui,pluginRuntimes,workshopWarning,false)){
-                        customMapStatusDirty=true;
+                    openWorkshop(ui,pluginRuntimes,workshopWarning,false);
+                    {
+                        if(localPackageRepairPending)workshopTab=WorkshopTab::CustomPackages;
+                        sessionCustomMaps.dirty=sessionMods.dirty=true;
                         selected=0;catalogScroll=0;catalogScrollTarget=0;detailScroll=0;detailScrollTarget=0;detailAction=0;
                         notice.clear();catalogNotice=workshopWarning;screen=Screen::Catalog;
-                    }else waitModal(ui,"Workshop unavailable",workshopWarning.empty()?"No valid plugin listings are available.":workshopWarning,true);
+                    }
                     redraw=true;
                 }
                 else if(homeAction==3)enterLocalModManager();
@@ -1892,15 +1915,11 @@ int main(){
             if(b&button::B){screen=Screen::Home;dashboard.returnToMenu(4);redraw=true;}
             else if(b&button::Y){refreshSupport();redraw=true;}
             else if(b&button::A){
-                std::string exportError;
-                const std::string reportPath=std::string(config::SdRoot)+"/diagnostics.txt";
-                if(writeTextFileAtomic(reportPath,supportReport.text,exportError)){
-                    supportNotice="Saved: sd:/wiiu/apps/Unbound-HQ/diagnostics.txt";
-                    std::string censusError;
-                    if(!config::ghostsMode()){
-                        ui.loading("Support & Stats","Recording native folder links (read-only)...",-1);
-                        if(writeNativeLinkCensus(install,censusError))supportNotice+=" and native-link-census.txt";
-                    }
+                std::string exportError;SupportExportResult exported;
+                const ProgressCallback progress=[&](const std::string& title,const std::string& detail,int percent){ui.loading(title,detail,percent);};
+                if(exportSupportArchive(install,supportReport.text,exported,exportError,progress)){
+                    supportNotice="Saved: sd:/wiiu/apps/Unbound-HQ/support-report.zip | "+std::to_string(exported.consoleLogs)+" console logs";
+                    if(!exported.warning.empty())waitModal(ui,"Support ZIP saved",supportNotice+"\n\n"+exported.warning);
                 }
                 else{waitModal(ui,"Report export failed",exportError,true);supportNotice="Export failed; report remains available here.";}
                 redraw=true;
@@ -2000,45 +2019,54 @@ int main(){
         }else if(screen==Screen::Catalog){
             if((b&button::B)||(b&button::L)){screen=Screen::Home;dashboard.returnToMenu(2);notice.clear();catalogNotice.clear();redraw=true;continue;}
             if(b&(button::Left|button::Right)){
-                const auto next=(b&button::Right)?WorkshopTab::CustomMaps:WorkshopTab::Plugins;
+                const auto next=static_cast<WorkshopTab>(std::clamp(int(workshopTab)+((b&button::Right)?1:-1),0,int(WorkshopTab::CustomPackages)));
                 if(next!=workshopTab){workshopTab=next;ui.invalidateTouch();redraw=true;}
                 b&=~(button::A|button::X);
             }
-            if(workshopTab==WorkshopTab::CustomMaps){
-                if(!sessionCustomMapsLoaded||customMapStatusDirty){
-                    const bool firstLoad=!sessionCustomMapsLoaded;loadCustomMaps(ui);refreshCustomMapVersions(install,customVersions);
-                    if(firstLoad){customSelected=0;customScroll=customScrollTarget=0;}
-                    customMapStatusDirty=false;redraw=true;
+            if(workshopTab==WorkshopTab::CustomPackages){
+                const auto result=openLocalPackages(ui,install,contentUpdatesAllowed);
+                (void)navigation.update(0,result.held,SDL_GetTicks());
+                if(result.exit)exitRequested=true;
+                else if(result.tab>=0)workshopTab=static_cast<WorkshopTab>(result.tab);
+                else{screen=Screen::Home;dashboard.returnToMenu(result.section<0?2:result.section);if(result.section>=0&&result.section!=2)pendingSection=result.section;}
+                redraw=true;continue;
+            }else if(isWorkshopContentTab(workshopTab)){
+                auto& catalog=workshopContentCatalog(workshopTab);const bool mods=workshopTab==WorkshopTab::Mods;
+                if(!catalog.loaded||catalog.dirty){
+                    const bool firstLoad=!catalog.loaded;loadWorkshopContent(ui,workshopTab);refreshWorkshopContentVersions(install,workshopTab);
+                    if(firstLoad){catalog.selected=0;catalog.scroll=catalog.scrollTarget=0;}
+                    catalog.dirty=false;redraw=true;
                 }
                 if(b&button::X){
-                    const auto key=customSelected<sessionCustomMaps.size()?sessionCustomMaps[customSelected].id:std::string{};
-                    loadCustomMaps(ui,true);refreshCustomMapVersions(install,customVersions);customSelected=0;
-                    for(std::size_t i=0;i<sessionCustomMaps.size();++i)if(sessionCustomMaps[i].id==key)customSelected=i;
-                    customScroll=customScrollTarget=0;redraw=true;
+                    const auto key=catalog.selected<catalog.items.size()?catalog.items[catalog.selected].id:std::string{};
+                    loadWorkshopContent(ui,workshopTab,true);refreshWorkshopContentVersions(install,workshopTab);catalog.selected=0;
+                    for(std::size_t i=0;i<catalog.items.size();++i)if(catalog.items[i].id==key)catalog.selected=i;
+                    catalog.scroll=catalog.scrollTarget=0;redraw=true;
                 }
-                if(!sessionCustomMaps.empty()){
-                    customSelected=std::min(customSelected,sessionCustomMaps.size()-1);
-                    if((b&button::Down)&&customSelected+1<sessionCustomMaps.size()){++customSelected;redraw=true;}
-                    if((b&button::Up)&&customSelected>0){--customSelected;redraw=true;}
-                    const int top=234+int(customSelected)*142-customScrollTarget;
-                    if(top>510)customScrollTarget=std::min(pluginCatalogMaximumScroll(sessionCustomMaps.size()),customScrollTarget+top-510);
-                    if(top<234)customScrollTarget=std::max(0,customScrollTarget-(234-top));
+                if(!catalog.items.empty()){
+                    catalog.selected=std::min(catalog.selected,catalog.items.size()-1);
+                    if((b&button::Down)&&catalog.selected+1<catalog.items.size()){++catalog.selected;redraw=true;}
+                    if((b&button::Up)&&catalog.selected>0){--catalog.selected;redraw=true;}
+                    const int top=234+int(catalog.selected)*142-catalog.scrollTarget;
+                    if(top>510)catalog.scrollTarget=std::min(pluginCatalogMaximumScroll(catalog.items.size()),catalog.scrollTarget+top-510);
+                    if(top<234)catalog.scrollTarget=std::max(0,catalog.scrollTarget-(234-top));
                     if(b&button::A){
-                        const auto& map=sessionCustomMaps[customSelected];
-                        const auto version=customSelected<customVersions.size()?customVersions[customSelected]:std::string{};
+                        const auto& map=catalog.items[catalog.selected];
+                        const auto version=catalog.selected<catalog.versions.size()?catalog.versions[catalog.selected]:std::string{};
                         const auto* release=mapPackRelease(map,version,version==map.full.version);
                         if(!contentUpdatesAllowed)waitModal(ui,"HQ update required","Install the HQ update before changing game files.",true);
-                        else if(repairNeeded())waitModal(ui,"Finish the current installation","Open Install / Update and finish the saved repair or installation before adding a custom map.",true);
+                        else if(repairNeeded())waitModal(ui,"Finish the current installation","Open Install / Update and finish the saved repair or installation before adding Workshop content.",true);
                         else if(!mapPackTargetReady(install)||install.modVersion.empty()||install.modVersion=="Not installed")
-                            waitModal(ui,"Install Core first","Use Install / Update to install Core on the correct USB or internal-storage game update before adding custom maps.",true);
-                        else if(!release)waitModal(ui,"Newer map installed","Your installed map is newer than this catalog entry. HQ will keep it.");
-                        else if(confirmAction(ui,version==map.full.version?"Reinstall custom map?":version.empty()?"Install custom map?":"Update custom map?",
+                            waitModal(ui,"Install Core first","Use Install / Update to install Core on the correct USB or internal-storage game update before adding Workshop content.",true);
+                        else if(!release)waitModal(ui,"Newer version installed","Your installed content is newer than this catalog entry. HQ will keep it.");
+                        else if(confirmAction(ui,version==map.full.version?(mods?"Reinstall mod?":"Reinstall custom map?"):version.empty()?(mods?"Install mod?":"Install custom map?"):(mods?"Update mod?":"Update custom map?"),
                             map.name+"\n\n"+map.description+"\n\nVersion: "+release->version+"\nPackage: "+packageBytes(release->compressedBytes)+
-                            "\nDestination: "+deviceName(install.update.device)+" / "+install.languageFolder,"INSTALL")){
+                            "\nGame storage: "+deviceName(install.update.device)+" / "+install.languageFolder+
+                            (mods?"\nSD payload: "+std::string(config::gameSdContentDisplayPath())+"\nZIP folders choose the actual destinations.":""),"INSTALL")){
                             std::string mapError;downloadWasCancelled=false;
-                            if(installMapJobs(ui,install,{{map.id,map.name,*release}},mapError))waitModal(ui,"Custom map installed",map.name+" is ready. Launch the game through HQ.");
-                            else if(!downloadWasCancelled){lastSessionError=mapError;waitModal(ui,"Custom map install stopped",mapError,true);}
-                            refreshCustomMapVersions(install,customVersions);
+                            if(installMapJobs(ui,install,{{map.id,map.name,*release}},mapError))waitModal(ui,mods?"Mod installed":"Custom map installed",map.name+(mods?" is installed. Enable it from the game's mod menu.":" is ready. Launch the game through HQ."));
+                            else if(!downloadWasCancelled){lastSessionError=mapError;waitModal(ui,mods?"Mod install stopped":"Custom map install stopped",mapError,true);}
+                            refreshWorkshopContentVersions(install,workshopTab);
                         }
                         redraw=true;
                     }
@@ -2146,7 +2174,7 @@ int main(){
         const auto easeScroll=[&redraw](int& value,int target){const int distance=target-value;if(distance){value+=std::clamp(distance,-18,18);redraw=true;}};
         if(screen==Screen::Details)easeScroll(detailScroll,detailScrollTarget);
         if(screen==Screen::Catalog&&workshopTab==WorkshopTab::Plugins)easeScroll(catalogScroll,catalogScrollTarget);
-        if(screen==Screen::Catalog&&workshopTab==WorkshopTab::CustomMaps)easeScroll(customScroll,customScrollTarget);
+        if(screen==Screen::Catalog&&isWorkshopContentTab(workshopTab)){auto& catalog=workshopContentCatalog(workshopTab);easeScroll(catalog.scroll,catalog.scrollTarget);}
         if(screen==Screen::LocalMods){easeScroll(localScroll,localScrollTarget);easeScroll(localDetailsScroll,localDetailsScrollTarget);}
         if(redraw){
             const Release* release=releaseForSku(releases,install.sku);
@@ -2159,7 +2187,7 @@ int main(){
             else if(screen==Screen::Support)ui.support(supportReport.text,supportScroll,supportNotice);
             else if(screen==Screen::LocalMods)ui.localModManager(localMods,localSelected,localScroll,notice,!config::ghostsMode(),install.update.device,localDetailsScroll);
             else if(screen==Screen::Catalog){
-                if(workshopTab==WorkshopTab::CustomMaps)ui.workshopCustomMaps(sessionCustomMaps,customVersions,customSelected,customScroll,sessionCustomMapsNotice,contentUpdatesAllowed&&mapPackTargetReady(install)&&!repairNeeded()&&!install.modVersion.empty()&&install.modVersion!="Not installed");
+                if(isWorkshopContentTab(workshopTab)){const auto& catalog=workshopContentCatalog(workshopTab);ui.workshopContent(workshopTab,catalog.items,catalog.versions,catalog.selected,catalog.scroll,catalog.notice,contentUpdatesAllowed&&mapPackTargetReady(install)&&!repairNeeded()&&!install.modVersion.empty()&&install.modVersion!="Not installed");}
                 else{std::vector<WorkshopPlugin> plugins;std::vector<PluginInstallStatus> statuses;std::vector<bool> checked,ready;for(const auto& runtime:pluginRuntimes){plugins.push_back(runtime.plugin);statuses.push_back(runtime.status);checked.push_back(runtime.checked);ready.push_back(runtime.releaseReady);}ui.pluginCatalog(plugins,statuses,checked,selected,catalogScroll,catalogNotice,ready);}
             }
             else if(screen==Screen::Details&&!pluginRuntimes.empty()){const auto& runtime=pluginRuntimes[selected];ui.pluginDetails(runtime.plugin,runtime.releaseReady?&runtime.release:nullptr,runtime.status,runtime.autoUpdateEnabled,detailAction,detailScroll,notice,runtime.feedStatus);}

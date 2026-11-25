@@ -7,7 +7,7 @@
 int main() {
     using namespace unbound::config;
     using namespace std::literals;
-    assert(AppReleaseRevision == 64);
+    assert(AppReleaseRevision == 66);
     assert(ReleasesUrl == "https://downloads.unc-bo2.fun/release-manifest.txt"sv);
     assert(std::string_view(MapPacksUrl)==ReleasesUrl);
     assert(VersionRelativePath == "content/update.txt"sv);
@@ -39,7 +39,7 @@ int main() {
 #else
     static_assert(!DiagnosticSdBuild);
     assert(AppName == "Unbound HQ"sv);
-    assert(AppVersion == "1.0.2"sv);
+    assert(AppVersion == "1.5"sv);
     assert(SdRoot == "fs:/vol/external01/wiiu/apps/Unbound-HQ"sv);
     assert(SettingsPath == "fs:/vol/external01/wiiu/apps/Unbound-HQ/settings.ini"sv);
     assert(CacheRoot == "fs:/vol/external01/wiiu/apps/Unbound-HQ/cache"sv);

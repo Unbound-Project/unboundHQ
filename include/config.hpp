@@ -13,13 +13,13 @@ inline constexpr const char* AppVersion = "1.0.0-sd-test1";
 #else
 inline constexpr bool DiagnosticSdBuild = false;
 inline constexpr const char* AppName = "Unbound HQ";
-inline constexpr const char* AppVersion = "1.0.2";
+inline constexpr const char* AppVersion = "1.5";
 #define UNBOUND_HQ_SD_ROOT "fs:/vol/external01/wiiu/apps/Unbound-HQ"
 #define UNBOUND_HQ_WUHB_NAME "Unbound-HQ.wuhb"
 #endif
 // Monotonic integer used only by the HQ self-updater. Increment it for every
 // published WUHB, even when the display version is a beta or hotfix label.
-inline constexpr unsigned long long AppReleaseRevision = 64;
+inline constexpr unsigned long long AppReleaseRevision = 66;
 
 // Replace YOUR_GITHUB_NAME and the repository name with your public distribution repository.
 // See server-example/README.md for the recommended GitHub repository and Release layout.
@@ -92,6 +92,10 @@ inline const char* gameChangesUrl() { return ghostsMode() ? GhostsChangesUrl : C
 inline const char* gameCustomMapsUrl() {
     return ghostsMode()?"https://downloads.unc-bo2.fun/ghosts/custom-maps.txt":
                         "https://downloads.unc-bo2.fun/custom-maps.txt";
+}
+inline const char* gameModsUrl() {
+    return ghostsMode()?"https://downloads.unc-bo2.fun/ghosts/mods.txt":
+                        "https://downloads.unc-bo2.fun/mods.txt";
 }
 inline const char* gameReleasesCachePath() {
     return ghostsMode() ? UNBOUND_HQ_SD_ROOT "/ghosts/cache/release-manifest.txt" : ReleasesCachePath;

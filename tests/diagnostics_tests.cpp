@@ -296,6 +296,17 @@ int main() {
         "r29|download|ok=1|total_ms=1000|probe_ms=50|size_source=unknown|bytes=10|mode=buffered\n";
     contains(collectDiagnostics(context, io).text, "Package size source: Unknown; bounded streaming fallback");
 
+    const auto previousGame=config::activeGame;
+    for(const auto game:{Game::BlackOpsII,Game::Ghosts}){
+        config::activeGame=game;
+        const auto localPath=std::string(config::gameStateRoot())+"/local-package-install.txt";
+        const auto source=std::string(game==Game::Ghosts?"ghosts-local-package.zip":"bo2-local-package.zip");
+        texts[localPath]="UNBOUND_LOCAL_PACKAGE_V1\nfs:/vol/external01/Packages/"+source+"\n";
+        const auto localReport=collectDiagnostics(context,io).text;
+        contains(localReport,"LOCAL PACKAGE RECOVERY");contains(localReport,"Record: "+localPath);
+        contains(localReport,source);
+    }
+    config::activeGame=previousGame;
     const auto empty = collectDiagnostics({}, {}).text;
     contains(empty, "Detected game SKU: Not found");
     contains(empty, "No readable measurement recorded");

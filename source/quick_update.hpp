@@ -2,14 +2,19 @@
 
 #include "install_selection.hpp"
 #include "map_packs.hpp"
+#include "update_estimates.hpp"
+#include <optional>
 
 namespace unbound {
 struct QuickUpdateRow {
     std::string title, installed, latest, detail;
     std::uint64_t bytes = 0;
+    std::optional<std::uint64_t> networkBytes={};
+    std::uint64_t downloadSeconds=0,installSeconds=0;
+    bool timingFromHistory=false;
 };
 struct QuickMapUpdate { std::string id,name; Release release; };
-struct QuickMapState { const MapPack* pack; std::string installed; bool selected; };
+struct QuickMapState { const MapPack* pack; std::string installed; };
 struct QuickUpdatePlan {
     GameInstall target;
     std::vector<const Release*> core;
@@ -40,7 +45,7 @@ inline QuickUpdatePlan quickUpdatePlan(const std::vector<Release>& releases,cons
     const auto effective=plan.core.empty()?install.modVersion:plan.core.back()->version;
     const bool mapsAllowed=minimumCore.empty()||compareVersions(effective,minimumCore)>=0;
     for(const auto& state:maps){
-        if(!mapsAllowed||!state.selected||!state.pack)continue;
+        if(!mapsAllowed||!state.pack||state.installed.empty())continue;
         if(const auto* release=mapPackRelease(*state.pack,state.installed)){
             plan.maps.push_back({state.pack->id,state.pack->name,*release});
             plan.rows.push_back({state.pack->name,state.installed.empty()?"Not installed":state.installed,
@@ -75,5 +80,5 @@ inline bool sameQuickUpdatePlan(const QuickUpdatePlan& left,const QuickUpdatePla
         if(left.maps[i].id!=right.maps[i].id||!sameQuickRelease(left.maps[i].release,right.maps[i].release))return false;
     return true;
 }
-inline int quickUpdateMaximumScroll(std::size_t rows) { return std::max(0,int(rows)*126-258); }
+inline int quickUpdateMaximumScroll(std::size_t rows) { return std::max(0,int(rows)*88-229); }
 }

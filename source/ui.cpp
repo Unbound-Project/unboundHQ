@@ -1366,7 +1366,7 @@ int Ui::support(const std::string& report,int scrollOffset,const std::string& st
     pump();beginTouch("support");backdrop();header("Support & diagnostics",true);
     quietPanel({244,121,1008,524});
     text(bold28_,"System information",268,136,White,940);
-    const std::string message=status.empty()?"A exports this report to your SD card. Y / 2 refreshes local information.":status;
+    const std::string message=status.empty()?"A exports HQ reports + Wii U crash logs to ZIP. Y / 2 refreshes.":status;
     text(regular18_,message,268,176,status.empty()?LightText:accentColor(),960);
     const SDL_Rect clip{268,207,960,430};SDL_RenderSetClipRect(renderer_,&clip);
     const int offset=std::clamp(scrollOffset,0,supportMaximumScroll_);
@@ -1380,7 +1380,7 @@ int Ui::support(const std::string& report,int scrollOffset,const std::string& st
     SDL_RenderSetClipRect(renderer_,nullptr);
     scrollBar(clip,offset,supportMaximumScroll_);
     navigationRail(4);
-    footer({{"A","Export"},{"UP/DN","Scroll"},{"Y/2","Refresh"},{"B","Back"}});
+    footer({{"A","Export ZIP"},{"UP/DN","Scroll"},{"Y/2","Refresh"},{"B","Back"}});
     present();return supportMaximumScroll_;
 }
 
@@ -1510,14 +1510,15 @@ void Ui::localModManager(const std::vector<LocalModInventoryItem>& mods,
 
 void Ui::workshopHeader(WorkshopTab tab){
     text(bold38_,"Workshop",244,116,White,500);
-    text(regular18_,tab==WorkshopTab::Plugins?"The plugins that power your setup.":
-         "Community-made maps for "+std::string(gameName(config::activeGame))+".",244,173,Muted,1008);
-    const SDL_Rect tabs{812,122,440,48};
+    text(regular18_,tab==WorkshopTab::Plugins?"The plugins that power your setup.":tab==WorkshopTab::CustomPackages?
+         "Install ZIP packages from your SD card.":tab==WorkshopTab::Mods?"Download and manage mods for "+std::string(gameName(config::activeGame))+".":"Community-made maps for "+std::string(gameName(config::activeGame))+".",244,173,Muted,1008);
+    const SDL_Rect tabs{476,122,776,48};
     roundRect(tabs,8,PanelBorder);
     roundRect({tabs.x+1,tabs.y+1,tabs.w-2,tabs.h-2},7,darkColor());
-    const char* labels[]={"Plugins","Custom Maps"};
-    for(int i=0;i<2;++i){
-        const SDL_Rect segment{tabs.x+i*220,tabs.y,220,tabs.h};
+    const char* labels[]={"Plugins","Custom Maps","Mods","Custom Packages"};
+    const int widths[]={180,210,140,246};int tabX=tabs.x;
+    for(int i=0;i<4;++i){
+        const SDL_Rect segment{tabX,tabs.y,widths[i],tabs.h};tabX+=widths[i];
         const bool active=int(tab)==i;
         if(active)roundRect({segment.x+4,segment.y+4,segment.w-8,segment.h-8},5,raisedColor());
         text(bold20_,labels[i],segment.x+segment.w/2,segment.y+10,
@@ -1526,12 +1527,46 @@ void Ui::workshopHeader(WorkshopTab tab){
     }
 }
 
-void Ui::workshopCustomMaps(const std::vector<MapPack>& maps,const std::vector<std::string>& installed,
+void Ui::localPackages(const std::string& directory,const std::vector<SdPackageEntry>& entries,
+                       std::size_t selected,int scroll,const std::string& notice,bool resuming){
+    std::string identity="local-packages|"+directory;
+    for(const auto& entry:entries)identity+='|'+entry.name;
+    pump();beginTouch(identity);backdrop();header("");navigationRail(2);workshopHeader(WorkshopTab::CustomPackages);
+    const auto path="sd:/"+(directory.size()>std::string(SdBrowseRoot).size()?directory.substr(std::string(SdBrowseRoot).size()+1):"");
+    text(regular18_,path,244,205,Muted,1008);
+    const SDL_Rect clip{244,234,574,408};SDL_RenderSetClipRect(renderer_,&clip);
+    for(std::size_t i=0;i<entries.size();++i){
+        const SDL_Rect row{244,234+int(i)*66-scroll,574,58};
+        if(row.y+row.h<clip.y||row.y>clip.y+clip.h)continue;
+        quietPanel(row,i==selected);touchTarget(row,TouchActionKind::PackageEntry,int(i),&clip);
+        auto* icon=navigationIcons_[entries[i].directory?3:1];const auto tint=i==selected?accentColor():Muted;
+        SDL_SetTextureColorMod(icon,tint.r,tint.g,tint.b);const SDL_Rect symbol{258,row.y+14,28,28};SDL_RenderCopy(renderer_,icon,nullptr,&symbol);
+        text(bold20_,entries[i].name,300,row.y+5,White,498);
+        text(regular18_,entries[i].directory?"Folder":displayPackageSize(entries[i].bytes),300,row.y+31,Muted,498);
+    }
+    SDL_RenderSetClipRect(renderer_,nullptr);scrollBar(clip,scroll,std::max(0,int(entries.size())*66-408));
+    if(entries.empty())wrapped(regular22_,"No folders or ZIP packages here.",{270,290,520,110},LightText);
+    SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,848,239,848,643);
+    text(bold28_,resuming?"Resume package":"Choose a package",878,238,White,364);
+    wrapped(regular18_,"Browse your SD folders, then select a ZIP to review its files and destinations.",{878,291,364,92},LightText);
+    text(bold20_,"ZIP folder destinations",878,404,White,364);
+    text(regular18_,"update/  >  game update on USB / NAND",878,445,LightText,364);
+    wrapped(regular18_,std::string("sd/  >  ")+config::gameSdContentDisplayPath(),{878,481,364,62},LightText);
+    const SDL_Rect open{878,558,364,54};const bool ready=!entries.empty();
+    primaryAction(open,ready&&entries[std::min(selected,entries.size()-1)].directory?"Open folder":"Review ZIP",true,ready);
+    if(ready)touchTarget(open,TouchActionKind::PackageEntry,int(std::min(selected,entries.size()-1)));
+    if(!notice.empty())text(regular18_,notice,878,620,Muted,364);
+    else text(regular18_,"Your source ZIP stays on the SD card.",878,625,Muted,364);
+    footer({{"A","Open / review"},{"UP/DN","Browse"},{"Y/2","Parent folder"},{"X/1","Refresh"},{"B",directory==SdBrowseRoot?"HQ":"Up a folder"}});present();
+}
+
+void Ui::workshopContent(WorkshopTab tab,const std::vector<MapPack>& maps,const std::vector<std::string>& installed,
                             std::size_t selected,int scrollOffset,const std::string& notice,bool installReady){
-    std::string identity=config::ghostsMode()?"workshop-custom-maps-ghosts":"workshop-custom-maps-bo2";
+    const bool mods=tab==WorkshopTab::Mods;
+    std::string identity=std::string(mods?"workshop-mods-":"workshop-custom-maps-")+(config::ghostsMode()?"ghosts":"bo2");
     for(const auto& map:maps)identity+='|'+map.id+'@'+map.full.version;
     pump();beginTouch(identity);
-    backdrop();header("");navigationRail(2);workshopHeader(WorkshopTab::CustomMaps);
+    backdrop();header("");navigationRail(2);workshopHeader(tab);
     if(!notice.empty())text(regular18_,notice,244,205,Muted,1008);
     if(!maps.empty()){
         const auto versionFor=[&](std::size_t i){return i<installed.size()?installed[i]:std::string{};};
@@ -1559,7 +1594,7 @@ void Ui::workshopCustomMaps(const std::vector<MapPack>& maps,const std::vector<s
         SDL_SetRenderDrawColor(renderer_,43,49,53,255);SDL_RenderDrawLine(renderer_,848,239,848,643);
         const auto index=std::min(selected,maps.size()-1);const auto& map=maps[index];const auto version=versionFor(index);
         const auto* release=mapPackRelease(map,version,version==map.full.version);
-        const std::string action=version==map.full.version?"Reinstall map":version.empty()?"Install map":"Update map";
+        const std::string action=version==map.full.version?(mods?"Reinstall mod":"Reinstall map"):version.empty()?(mods?"Install mod":"Install map"):(mods?"Update mod":"Update map");
         text(bold28_,map.name,878,238,White,364);
         wrapped(regular18_,map.description,{878,288,364,126},LightText);
         text(regular18_,"Latest",878,436,Muted,130);text(regular18_,map.full.version,1016,436,LightText,226);
@@ -1568,7 +1603,7 @@ void Ui::workshopCustomMaps(const std::vector<MapPack>& maps,const std::vector<s
         text(regular18_,"Download: "+std::to_string((bytes+1048575)/1048576)+" MiB",878,512,Muted,364);
         const SDL_Rect install{878,558,364,54};primaryAction(install,action,true,installReady&&release);
         if(installReady&&release)touchTarget(install,TouchActionKind::CustomMapAction,int(index));
-        text(regular18_,installReady?"Verified install to USB / internal storage":"Check Install / Update before installing",878,625,Muted,364);
+        text(regular18_,installReady?(mods?"ZIP folders choose SD / game storage":"Verified install to USB / internal storage"):"Check Install / Update before installing",878,625,Muted,364);
         footer({{"A","Review / install"},{"UP/DN","Navigate"},{"DPAD-LR","Switch tab"},{"X/1","Refresh"},{"B","HQ"}});present();return;
     }
     quietPanel({244,234,1008,408});
@@ -1576,9 +1611,9 @@ void Ui::workshopCustomMaps(const std::vector<MapPack>& maps,const std::vector<s
     auto* icon=navigationIcons_[2];const auto accent=accentColor();
     SDL_SetTextureColorMod(icon,accent.r,accent.g,accent.b);
     const SDL_Rect symbol{728,312,40,40};SDL_RenderCopy(renderer_,icon,nullptr,&symbol);
-    text(bold28_,"No custom maps available yet",748,404,White,900,true);
+    text(bold28_,mods?"No mods available yet":"No custom maps available yet",748,404,White,900,true);
     text(regular22_,"Check back for community releases.",748,455,LightText,900,true);
-    text(regular18_,"Use the Plugins tab to manage your Aroma plugins.",748,512,Muted,900,true);
+    text(regular18_,mods?"Installed mods can be managed from Mod Manager.":"Use the Plugins tab to manage your Aroma plugins.",748,512,Muted,900,true);
     suppressedTouchButtons_|=button::A;
     footer({{"DPAD-LR","Switch tab"},{"X/1","Refresh"},{"B","HQ"}});present();
 }
@@ -1790,63 +1825,34 @@ void Ui::network(){
 
 namespace unbound {
 void Ui::quickUpdate(const GameInstall& install,const std::vector<QuickUpdateRow>& rows,bool coreCurrent,int scroll){
-    pump();beginTouch("quick-update");backdrop();header("");navigationRail(1);
-    text(bold38_,"Updates available",244,116,White,1008);
-    text(regular18_,"Bring your installed content up to date.",244,174,Muted,1008);
-    SDL_SetRenderDrawColor(renderer_,43,49,53,255);
-    SDL_RenderDrawLine(renderer_,244,215,1252,215);
-    SDL_RenderDrawLine(renderer_,872,238,872,645);
-    text(bold20_,"Ready to update",244,235,White,610);
-
-    std::uint64_t total=0;
-    const SDL_Rect clip{244,276,610,242};
-    SDL_RenderSetClipRect(renderer_,&clip);
-    int y=278-scroll;
-    for(const auto& row:rows){
-        total+=row.bytes;
-        if(y+108<clip.y||y>clip.y+clip.h){y+=126;continue;}
-        quietPanel({244,y,610,108});
-        roundRect({263,y+23,24,24},4,accentColor());
-        checkmark({266,y+26,18,18},config::ghostsMode()?Ink:White);
-        text(bold20_,row.title,307,y+12,White,375);
-        const auto size=displayPackageSize(row.bytes);
-        text(regular18_,size,834-measure(regular18_,size).first,y+15,Muted,160);
-        text(regular18_,row.installed,307,y+43,Muted,130);
-        directionIcon({383,y+46,18,18},button::Right,Muted);
-        text(bold20_,row.latest,423,y+41,accentColor(),260);
-        text(regular18_,row.detail,307,y+77,LightText,527);
-        y+=126;
+    (void)coreCurrent;
+    pump();beginTouch("quick-update-confirm");backdrop();header("");
+    quietPanel({136,134,1008,480});
+    text(bold28_,"Updates available",164,154,White,952);
+    text(regular18_,"Update your installed content now? One confirmation updates everything listed below.",164,200,LightText,952);
+    const SDL_Rect clip{164,247,952,229};SDL_RenderSetClipRect(renderer_,&clip);
+    std::uint64_t bytes=0,download=0,installTime=0;bool measured=true;
+    for(std::size_t i=0;i<rows.size();++i){
+        const auto& row=rows[i];bytes+=row.networkBytes.value_or(row.bytes);download+=row.downloadSeconds;installTime+=row.installSeconds;measured=measured&&row.timingFromHistory;
+        const int y=247+int(i)*88-scroll;if(y+80<clip.y||y>clip.y+clip.h)continue;
+        roundRect({164,y,952,80},7,raisedColor());
+        text(bold20_,row.title,182,y+8,White,590);
+        const auto size=displayPackageSize(row.networkBytes.value_or(row.bytes));
+        text(regular18_,size,1098-measure(regular18_,size).first,y+10,Muted,220);
+        text(regular18_,row.installed+"  >  "+row.latest,182,y+43,Muted,300);
+        const auto timing=std::string(row.networkBytes.value_or(row.bytes)?"Download ~"+updateDuration(row.downloadSeconds):"Saved ZIP")+
+            "  /  Install ~"+updateDuration(row.installSeconds);
+        text(regular18_,timing,500,y+43,LightText,598);
     }
-    SDL_RenderSetClipRect(renderer_,nullptr);
-    scrollBar(clip,scroll,quickUpdateMaximumScroll(rows.size()));
-    y=rows.size()>2?530:278+int(rows.size())*126;
-    if(coreCurrent&&rows.size()<2){
-        checkmark({261,y+13,18,18},Green);
-        text(regular18_,"Unbound Core "+install.modVersion+" is up to date",293,y+6,Green,550);
-        y+=57;
-    }
-
-    const int savedY=std::max(548,y+10);
-    text(regular18_,"USING YOUR SAVED INSTALLATION",244,savedY,Muted,610);
-    text(regular22_,std::string(deviceName(install.update.device))+"  /  "+displayLanguage(install.languageFolder)+"  /  "+
-         (install.sku?regionName(install.sku->region):"Unknown"),244,savedY+31,White,610);
-    text(regular18_,"Saved packages are reused and verified before installing.",244,620,Muted,610);
-
-    text(bold20_,"Update summary",896,235,White,346);
-    checkmark({896,292,18,18},Green);
-    text(regular22_,std::to_string(rows.size())+(rows.size()==1?" update selected":" updates selected"),925,283,White,317);
-    text(regular18_,"Total download",896,343,Muted,346);
-    text(bold38_,displayPackageSize(total),896,373,accentColor(),346);
-    wrapped(regular18_,"Your saved location and language are ready.",{896,446,346,63},LightText);
-
-    const SDL_Rect update{896,536,346,60};
-    primaryAction(update,"Update now",true,!rows.empty());
-    touchTarget(update,TouchActionKind::Button,int(button::A));
-    const SDL_Rect options{896,613,346,34};
-    text(regular18_,"Update options  >",914,618,Muted,310);
-    touchTarget(options,TouchActionKind::Button,int(button::X));
-    if(rows.size()>2)footer({{"A","Update now"},{"UP/DN","Scroll updates"},{"X/1","Update options"},{"B","Back"}});
-    else footer({{"A","Update now"},{"X/1","Update options"},{"B","Back"}});
+    SDL_RenderSetClipRect(renderer_,nullptr);scrollBar(clip,scroll,quickUpdateMaximumScroll(rows.size()));
+    text(regular18_,"Download "+displayPackageSize(bytes)+"  /  Total ~"+updateDuration(download+installTime),164,491,White,952);
+    text(regular18_,measured?"Estimated from this console's previous downloads and installs.":"Initial estimates improve as HQ records downloads and installs.",164,521,Muted,590);
+    text(regular18_,std::string(deviceName(install.update.device))+" / "+displayLanguage(install.languageFolder),164,553,LightText,555);
+    const SDL_Rect accept{776,541,340,52};primaryAction(accept,"Update all",true,!rows.empty());
+    if(!rows.empty())touchTarget(accept,TouchActionKind::Button,int(button::A));
+    text(regular18_,"B  Not now",164,582,Muted,380);touchTarget({154,575,360,34},TouchActionKind::Button,int(button::B));
+    if(rows.size()>2)footer({{"A","Update all"},{"UP/DN","Scroll"},{"B","Not now"},{"X/1","Install settings"}});
+    else footer({{"A","Update all"},{"B","Not now"},{"X/1","Install settings"}});
     present();
 }
 }

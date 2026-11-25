@@ -56,11 +56,13 @@ def verify(project: Path) -> None:
     assert "installFailureFeedback(installError)" in menu
     assert "lastSessionError=installError" in menu
     assert "refreshRecovery();notice=unfinishedSummary();" in menu
-    # Both startup's review flow and the Home Install / Update action must
-    # distinguish a completed install from simply backing out of the menu.
-    calls = main.count("const auto result=runInstallMenu(")
-    homes = main.count("dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1)")
-    assert calls == 2 and homes == calls
+    # Startup, switching games and the Home action all use the unified content
+    # menu. Completion returns home; backing out returns to Install / Update.
+    for entrypoint in (between(main,"if(reviewInstallOnStartup){","const auto switchGame="),
+                       between(main,"const auto switchGame=","while(WHBProcIsRunning()"),
+                       between(main,"else if(homeAction==1)","else if(homeAction==2)")):
+        assert "const auto result=openContentMenu(" in entrypoint
+        assert "dashboard.returnToMenu(result==InstallMenuResult::Completed?0:1)" in entrypoint
     assert "inheritedRepairGate.blocked()||recoveryStatus" in main
     assert "Open Install / Update before launching the game" in main
     repair = between(main, "InheritedRepairOutcome ensureInheritedRepair(", "enum class AppUpdateOutcome")
@@ -78,10 +80,12 @@ def verify(project: Path) -> None:
     # collisions AFTER routing. Check all localized parents before generic
     # stock-folder conversion can handle unrelated sound/FF paths.
     mapper = between(platform, "bool coreMapper(const std::string& name", "struct WorkshopContext")
-    assert "logical = localizedName" in mapper
-    assert "routeMovieInstallPath(logical, install.languageFolder)" in mapper
-    assert "route.destination.substr" in mapper
-    assert "MovieInstallPathStatus::Invalid" in mapper
+    assert "packageRoute(name,install.languageFolder)" in mapper
+    assert "packageDestination(route,install,config::activeGame)" in mapper
+    routing = (project / "source/package_layout.hpp").read_text(encoding="utf-8")
+    assert "routeMovieInstallPath(route.logical,install.languageFolder)" in routing
+    assert "movie.destination.substr" in routing
+    assert "MovieInstallPathStatus::Invalid" in routing
     assert "routeConsoleVideoArchivePath" not in mapper
     folders = between(platform, "bool prepareCoreContentPatchReferences(", "bool extractArchiveImpl(")
     assert "if(!entry.consoleVideo&&!addContentFolderLinkPrefixes" in folders
@@ -103,7 +107,7 @@ def verify(project: Path) -> None:
     assert "preflightNativeVideoInstall(" not in platform + main
     assert "native_video_probe.hpp" not in platform and "native_video_directory.hpp" not in platform
     assert "consoleVideoRuntimeReady" not in main and "content/unbound/video" not in mapper
-    assert "stockTitleRoot(install.update.device,install.sku->updateTitleId)" in mapper
+    assert "stockTitleRoot(install.update.device,install.sku->updateTitleId)" in routing
     # A missing original disc must fail source planning before the mutation
     # journal is armed; arm before the first stock-reference conversion and
     # again (idempotently) before payload writes if no conversion was needed.

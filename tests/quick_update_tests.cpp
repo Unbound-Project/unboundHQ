@@ -14,7 +14,7 @@ int main(){
     InstallPreferences preferences;
     assert(quickUpdateEligible(install,preferences,true,true,false));
     assert(shouldOpenQuickUpdates(install,preferences,releases,0,true,true,false));
-    auto both=quickUpdatePlan(releases,install,{{&pack,"1.0.0",true}},"1.0.0");
+    auto both=quickUpdatePlan(releases,install,{{&pack,"1.0.0"}},"1.0.0");
     assert(both.core.size()==1&&both.core[0]->kind==ReleaseKind::Patch&&both.core[0]->version=="1.0.2");
     assert(both.maps.size()==1&&both.maps[0].release.kind==ReleaseKind::Patch&&both.maps[0].release.compressedBytes==50);
     assert(both.rows.size()==2&&both.rows[0].bytes==10&&both.rows[1].bytes==50&&!both.coreCurrent);
@@ -22,14 +22,13 @@ int main(){
 
     // Already-current Core never becomes a full reinstall for a map-only update.
     install.modVersion="1.0.2";
-    auto maps=quickUpdatePlan(releases,install,{{&pack,"1.0.0",true}},"1.0.0");
+    auto maps=quickUpdatePlan(releases,install,{{&pack,"1.0.0"}},"1.0.0");
     assert(maps.core.empty()&&maps.maps.size()==1&&maps.rows.size()==1&&maps.coreCurrent);
     assert(shouldOpenQuickUpdates(install,preferences,releases,1,true,true,false));
     assert(!shouldOpenQuickUpdates(install,preferences,releases,0,true,true,false));
-    assert(quickUpdatePlan(releases,install,{{&pack,"1.0.1",true}},"1.0.0").empty());
-    assert(quickUpdatePlan(releases,install,{{&pack,"1.0.0",false}},"1.0.0").empty());
-    auto added=quickUpdatePlan(releases,install,{{&pack,"",true}},"1.0.0");
-    assert(added.maps.size()==1&&added.maps[0].release.kind==ReleaseKind::Full&&added.rows[0].installed=="Not installed");
+    assert(quickUpdatePlan(releases,install,{{&pack,"1.0.1"}},"1.0.0").empty());
+    auto added=quickUpdatePlan(releases,install,{{&pack,""}},"1.0.0");
+    assert(added.empty()); // New optional packs stay in the initial/optional installer.
     assert(!sameQuickUpdatePlan(maps,added));
 
     // Fresh installs, language replay and recovery retain the detailed flow.
@@ -62,5 +61,5 @@ int main(){
         auto plan=quickUpdatePlan(ghostReleases,ghosts,{},"");assert(plan.core.size()==1&&plan.rows.size()==1&&plan.rows[0].title=="Ghosts Core");
     }
     assert(quickUpdateMaximumScroll(1)==0&&quickUpdateMaximumScroll(2)==0&&quickUpdateMaximumScroll(33)>0);
-    std::cout<<"Quick updates: startup routing, Core/map-only/both plans, opt-outs, recovery gates, unchanged target, exact package identity and all Ghosts regions passed\n";
+    std::cout<<"Quick updates: startup routing, Core/map-only/both plans, installed-only updates, recovery gates, unchanged target, exact package identity and all Ghosts regions passed\n";
 }

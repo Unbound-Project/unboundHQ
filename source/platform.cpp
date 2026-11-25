@@ -28,6 +28,8 @@
 #include "core_recovery.hpp"
 #include "package_cache_reset.hpp"
 #include "package_verification_policy.hpp"
+#include "local_package_state.hpp"
+#include "support_archive.hpp"
 #include "sha256.hpp"
 #include "https_curl.hpp"
 
@@ -1889,6 +1891,7 @@ bool prepareCoreContentPatchReferences(const GameInstall& install, const std::ve
     std::set<std::string> candidates;
     std::uint64_t payloadBytes=0;
     for(const auto& entry:entries){
+        if(entry.logical=="sd"||entry.logical.rfind("sd/",0)==0)continue;
         // Movie destinations were checked separately as normal directories.
         // Never materialize a stock movie reference or inventory its library.
         if(!entry.consoleVideo&&!addContentFolderLinkPrefixes(contentRoot,entry.directory?entry.target:parentPath(entry.target),candidates,error))return false;
@@ -2000,9 +2003,14 @@ bool extractArchiveImpl(const std::string& archive, Mapper mapper, void* context
             return false;
         }
         bytes += info.size;
+        if(directory&&(name=="update"||name=="update/code"||name=="update/content"||name=="sd"))continue;
         if (testerArchive && testerReadmeEntry(name, directory, info.size)) continue;
         std::string target,logical;
         if (!mapper(name,target,logical,context)) { error = "Archive contains an unsupported path: " + name; return false; }
+        std::string sourceKey=archive,targetKey=target;
+        std::transform(sourceKey.begin(),sourceKey.end(),sourceKey.begin(),[](unsigned char c){return char(std::tolower(c));});
+        std::transform(targetKey.begin(),targetKey.end(),targetKey.begin(),[](unsigned char c){return char(std::tolower(c));});
+        if(sourceKey==targetKey){error="A package cannot replace its own source ZIP. Move the ZIP to another SD folder.";return false;}
         if (reservedInstallPayloadPath(logical)) {
             error = "Archive contains an installer-owned path: " + name +
                     ". Do not package update.txt or temporary replacement files.";
@@ -2082,7 +2090,7 @@ bool extractArchiveImpl(const std::string& archive, Mapper mapper, void* context
             return false;
         }
     }
-    installProgress.finishing("Closing the package and saving the installed version...");
+    installProgress.finishing("Closing the package and saving installation records...");
     if (!archiveReader.close()) { error = "Could not close ZIP cleanly"; return false; }
     if (commit && !commit(error)) return false;
     installProgress.finish();
@@ -2095,6 +2103,9 @@ bool extractArchive(const std::string& archive, Mapper mapper, void* context,
                     const InstallCommit& beforeWrite = {}, const InstallCommit& beforeMutation = {},
                     const GameInstall* consoleInstall = nullptr) {
     if(mapper==coreMapper)consoleInstall=static_cast<const GameInstall*>(context);
+    const auto* timingInstall=consoleInstall;
+    struct stat timingArchive{};const auto compressedBytes=lstat(archive.c_str(),&timingArchive)==0&&timingArchive.st_size>0?
+        static_cast<unsigned long long>(timingArchive.st_size):0;
     // Ghosts uses its native update layout, without BO2 folder-link migration.
     if(consoleInstall&&consoleInstall->sku&&consoleInstall->sku->game==Game::Ghosts)consoleInstall=nullptr;
     OperationMetrics metrics;
@@ -2125,6 +2136,8 @@ bool extractArchive(const std::string& archive, Mapper mapper, void* context,
     metrics.totalTicks = operationMetricsNow() - started;
     const std::string fields =
         "total_ms=" + std::to_string(operationMetricsMilliseconds(metrics.totalTicks)) +
+        "|compressed_bytes="+std::to_string(compressedBytes)+
+        "|device="+(timingInstall?std::string(mapStorageTag(timingInstall->update.device)):std::string("SD"))+
         "|zip_ms=" + std::to_string(operationMetricsMilliseconds(metrics.archiveReadTicks)) +
         "|write_ms=" + std::to_string(operationMetricsMilliseconds(metrics.writeTicks)) +
         "|close_ms=" + std::to_string(operationMetricsMilliseconds(metrics.closeTicks)) +
@@ -2140,29 +2153,10 @@ bool extractArchive(const std::string& archive, Mapper mapper, void* context,
 }
 
 bool coreMapper(const std::string& name, std::string& target, std::string& logical, void* opaque) {
-    auto& install = *static_cast<const GameInstall*>(opaque);
-    std::string localizedName;
-    if (!localizeArchivePath(name, install.languageFolder, localizedName)) return false;
-    static constexpr const char* Root = "update";
-    if (localizedName != Root && localizedName.rfind("update/", 0) != 0) return false;
-    if (!install.update.present || !install.destinationReady) return false;
-    if(!install.sku||install.sku->game!=config::activeGame||(install.update.device!=Device::MLC&&install.update.device!=Device::USB)||
-       install.update.root!=stockTitleRoot(install.update.device,install.sku->updateTitleId))return false;
-    if (localizedName != Root && localizedName != "update/code" && localizedName != "update/content" &&
-        localizedName.rfind("update/code/", 0) != 0 &&
-        localizedName.rfind("update/content/", 0) != 0)
-        return false;
-    logical = localizedName;
-    if (install.sku->game == Game::Ghosts) {
-        target = install.update.root + logical.substr(sizeof("update") - 1);
-        return true;
-    }
-    const auto route = routeMovieInstallPath(logical, install.languageFolder);
-    if (route.status == MovieInstallPathStatus::Invalid) return false;
-    const auto slash = route.destination.find('/');
-    target = slash == std::string::npos ? install.update.root
-                                         : install.update.root + "/" + route.destination.substr(slash + 1);
-    return true;
+    const auto& install=*static_cast<const GameInstall*>(opaque);
+    const auto route=packageRoute(name,install.languageFolder);
+    target=packageDestination(route,install,config::activeGame);logical=route.logical;
+    return !target.empty();
 }
 
 struct WorkshopContext { const GameInstall* install; const WorkshopMod* mod; };
@@ -2670,6 +2664,8 @@ bool writeNativeLinkCensus(const GameInstall& install,std::string& error){
     report+="Visited: "+std::to_string(visited)+"; link entries: "+std::to_string(links)+"\n";
     return writeTextFileAtomic(std::string(config::SdRoot)+"/native-link-census.txt",report.substr(0,MaximumReport),error);
 }
+
+#include "support_export_platform.inc"
 
 bool ensureDirectory(const std::string& path) {
     PosixDirectoryIo io;
@@ -3867,9 +3863,10 @@ bool installMapArchive(const std::string& archive, const GameInstall& install,
     if(!revalidateInstallDestination(install,error,true))return false;
     struct MapContext {
         const GameInstall& game;
+        bool modPackage;
         std::set<std::string> otherFiles;
         std::vector<std::pair<std::string,std::string>> paths;
-    } context{install,{},{}};
+    } context{install,id.rfind("mod-",0)==0,{},{}};
     const auto stateRoot=std::string(config::gameStateRoot())+"/maps";
     const auto device=install.update.device;
     const auto ownershipSuffix=mapOwnershipSuffix(device);
@@ -3878,15 +3875,32 @@ bool installMapArchive(const std::string& archive, const GameInstall& install,
     if(!records){error="Could not inspect installed map ownership";return false;}
     while(auto* entry=readdir(records)){
         const std::string name=entry->d_name;
-        if(!name.ends_with(ownershipSuffix)||name.rfind(id+"~",0)==0)continue;
+        if((!name.ends_with("~usb.files")&&!name.ends_with("~nand.files"))||name.rfind(id+"~",0)==0)continue;
+        const bool sameDevice=name.ends_with(ownershipSuffix);
         std::string saved;
         if(!readTextFile(stateRoot+"/"+name,saved,1024*1024)){closedir(records);error="Could not read map file ownership";return false;}
         std::istringstream lines(saved);std::string path;
-        while(std::getline(lines,path))context.otherFiles.insert(lowerValue(trim(path)));
+        while(std::getline(lines,path))if(sameDevice||path.rfind("sd:",0)==0)context.otherFiles.insert(lowerValue(trim(path)));
     }
     closedir(records);
     const auto mapper=[](const std::string& name,std::string& target,std::string& logical,void* opaque){
         auto& state=*static_cast<MapContext*>(opaque);
+        if(state.modPackage){
+            const auto route=modPackageRoute(name,state.game.languageFolder);
+            if(route.area==PackageArea::Invalid)return false;
+            const auto key=modPackageOwnershipKey(route);
+            if(state.otherFiles.count(lowerValue(key)))return false;
+            target=packageDestination(route,state.game,config::activeGame);logical=route.logical;
+            if(target.empty())return false;
+            state.paths.push_back({key,target});return true;
+        }
+        const auto layout=packageRoute(name,state.game.languageFolder);
+        if(layout.area==PackageArea::Sd){
+            const auto key="sd:"+layout.relative;
+            if(state.otherFiles.count(lowerValue(key)))return false;
+            if(!coreMapper(name,target,logical,const_cast<GameInstall*>(&state.game)))return false;
+            state.paths.push_back({key,target});return true;
+        }
         std::string relative;
         if(!mapPackRelativePath(name,state.game.languageFolder,relative))return false;
         if(state.otherFiles.count(lowerValue(relative)))return false;
@@ -3919,6 +3933,8 @@ bool installMapArchive(const std::string& archive, const GameInstall& install,
             return writeTextFileAtomic(marker,markerWithPack(previous,id,version,install.languageFolder,device),failure);
         },[](std::string&){return true;},beforeMutation,&install);
 }
+
+#include "local_package_platform.inc"
 
 bool installTesterArchive(const GameInstall& install, std::string& error,
                           const ProgressCallback& progress) {
@@ -5282,6 +5298,12 @@ bool cleanupDownloadCache(const std::vector<std::string>& activeNewsImages,
     if(repairState==CoreRecoveryLoadStatus::Pending){
         for(const auto& path:coreRecoveryProtectedCachePaths(repair))keep.insert(path);
     }
+    // A locally chosen ZIP may itself be in HQ's cache. Never discard the
+    // original source needed to finish an interrupted custom installation.
+    std::string localText,localError;LocalPackagePending localPending;
+    const bool localReadable=readInstallState(std::string(config::gameStateRoot())+"/local-package-install.txt",localText,localError);
+    const bool localUnknown=!localReadable||(!localText.empty()&&!parseLocalPackageJournal(localText,localPending,localError));
+    if(!localUnknown&&!localText.empty())keep.insert(localPending.package.path);
     DIR* directory = opendir(config::gameCacheRoot());
     if (!directory) { error = "Could not inspect the HQ cache"; return false; }
     bool ok = true;
@@ -5291,7 +5313,7 @@ bool cleanupDownloadCache(const std::vector<std::string>& activeNewsImages,
         const std::string path = std::string(config::gameCacheRoot()) + "/" + name;
         // Retain exact pending package identities. An unreadable journal must
         // never cause cleanup to destroy its possible repair download.
-        if(keep.find(path)!=keep.end()||
+        if(localUnknown||keep.find(path)!=keep.end()||
            (repairState==CoreRecoveryLoadStatus::Invalid&&name.rfind("core-",0)==0))continue;
         struct stat info{};
         if (stat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) continue;

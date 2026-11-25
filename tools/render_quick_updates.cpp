@@ -71,30 +71,38 @@ int main(int argc,char** argv){
  SDL_setenv("SDL_VIDEODRIVER","dummy",1);SDL_setenv("SDL_AUDIODRIVER","dummy",1);
  SDL_SetHint(SDL_HINT_RENDER_DRIVER,"software");
  Ui ui;std::string error;if(!ui.initialize(error)){std::cerr<<error;return 1;}
- const auto read=[](const char* path){std::ifstream input(path);std::ostringstream text;text<<input.rdbuf();return text.str();};
- const auto bo2Text=read("quick-update-bo2.txt"),ghostsText=read("quick-update-ghosts.txt");
+ const std::string hash(64,'a');
+ const std::string bo2Text="UNIVERSAL|FULL|-|1.0.4|https://example.test/core.zip|"+hash+"|441984130\n"
+     "PACK|pack-1|10|Unbound DLC 1: Revolution|Revolution maps\n"
+     "FILE|pack-1|FULL|-|1.0.1|https://example.test/dlc.zip|"+hash+"|1363428316\n"
+     "FILE|pack-1|PATCH|1.0.0|1.0.1|https://example.test/patch.zip|"+hash+"|150780195\n";
+ const std::string ghostsText="UNIVERSAL|FULL|-|1.0.1|https://example.test/ghosts.zip|"+hash+"|7068202\n";
+
  const auto bo2=parseReleases(bo2Text),ghosts=parseReleases(ghostsText);
  std::vector<MapPack> packs;if(!parseMapPacks(bo2Text,packs,error)||packs.empty())return 3;
  config::activeGame=Game::BlackOpsII;
- auto install=fixtureInstall(&SupportedSkus[0],Device::USB,Device::Disc,"english");install.modVersion="1.0.0";
+ auto install=fixtureInstall(&SupportedSkus[0],Device::USB,Device::Disc,"english");install.modVersion="1.0.3";
  const auto core=releasePlanForSku(bo2,install.sku,install.modVersion);
  if(core.empty())return 4;
  std::uint64_t coreBytes=0;for(const auto* row:core)coreBytes+=row->compressedBytes;
  const auto* pack=mapPackRelease(packs[0],"1.0.0");if(!pack)return 5;
- auto combined=quickUpdatePlan(bo2,install,{{&packs[0],"1.0.0",true}},"1.0.0");
+ auto combined=quickUpdatePlan(bo2,install,{{&packs[0],"1.0.0"}},"1.0.0");
+ const auto estimates=[](auto& rows){for(auto& row:rows){row.networkBytes=row.bytes;row.downloadSeconds=UpdateTimingHistory::seconds(row.bytes,2*1024*1024,1);row.installSeconds=UpdateTimingHistory::seconds(row.bytes,1024*1024,1);row.timingFromHistory=true;}};
+ estimates(combined.rows);
  ui.setNavigation(1,false);ui.quickUpdate(install,combined.rows,combined.coreCurrent);
  if(!screenshot(output/"quick-update-core-and-dlc.png"))return 6;
  ui.touchAction({true,false,0,0});ui.touchAction({true,true,1060,565});auto action=ui.touchAction({true,false,1060,565});
  if(!action||action->kind!=TouchActionKind::Button||action->value!=int(button::A))return 7;
  ui.touchAction({true,true,1050,630});action=ui.touchAction({true,false,1050,630});
- if(!action||action->kind!=TouchActionKind::Button||action->value!=int(button::X))return 8;
- install.modVersion="1.0.2";auto mapOnly=quickUpdatePlan(bo2,install,{{&packs[0],"1.0.0",true}},"1.0.0");ui.quickUpdate(install,mapOnly.rows,mapOnly.coreCurrent);
+ if(action)return 8;
+ ui.touchAction({true,true,240,590});action=ui.touchAction({true,false,240,590});if(!action||action->kind!=TouchActionKind::Button||action->value!=int(button::B))return 14;
+ install.modVersion="1.0.4";auto mapOnly=quickUpdatePlan(bo2,install,{{&packs[0],"1.0.0"}},"1.0.0");estimates(mapOnly.rows);ui.quickUpdate(install,mapOnly.rows,mapOnly.coreCurrent);
  if(!screenshot(output/"quick-update-map-pack-only.png"))return 9;
  config::activeGame=Game::Ghosts;
  auto ghostInstall=fixtureInstall(&GhostsSkus[0],Device::USB,Device::Disc,"english");ghostInstall.game=Game::Ghosts;ghostInstall.modVersion="1.0.0";
  const auto ghostPlan=releasePlanForSku(ghosts,ghostInstall.sku,ghostInstall.modVersion);
  if(ghostPlan.size()!=1)return 10;
- auto ghostUpdate=quickUpdatePlan(ghosts,ghostInstall,{},"");ui.quickUpdate(ghostInstall,ghostUpdate.rows,ghostUpdate.coreCurrent);
+ auto ghostUpdate=quickUpdatePlan(ghosts,ghostInstall,{},"");estimates(ghostUpdate.rows);ui.quickUpdate(ghostInstall,ghostUpdate.rows,ghostUpdate.coreCurrent);
  if(!screenshot(output/"quick-update-ghosts.png"))return 11;
  config::activeGame=Game::BlackOpsII;
  std::vector<QuickUpdateRow> longList(33,mapOnly.rows.front());

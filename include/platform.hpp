@@ -3,6 +3,7 @@
 #include "config.hpp"
 #include "model.hpp"
 #include "download_control.hpp"
+#include "package_layout.hpp"
 
 #include <functional>
 #include <string>
@@ -77,6 +78,10 @@ bool inspectInheritedContentRepair(const GameInstall& install, InheritedContentR
 // Read-only FSA stat dump of native link entries for FSMakeLink calibration.
 // Written to native-link-census.txt in the HQ SD folder; never writes the title.
 bool writeNativeLinkCensus(const GameInstall& install, std::string& error);
+struct SupportExportResult {std::string path,warning;unsigned consoleLogs=0,otherLogs=0;};
+bool exportSupportArchive(const GameInstall& install,const std::string& report,
+                          SupportExportResult& result,std::string& error,
+                          const ProgressCallback& progress = {});
 bool repairInheritedContent(const GameInstall& install, std::string& error,
                              const ProgressCallback& progress = {});
 bool installCoreArchive(const std::string& archive, const GameInstall& install,
@@ -91,6 +96,12 @@ bool installMapArchive(const std::string& archive, const GameInstall& install,
                        const std::function<bool(std::string&)>& beforeMutation = {});
 bool installTesterArchive(const GameInstall& install, std::string& error,
                           const ProgressCallback& progress = {});
+bool listSdPackages(const std::string& directory,std::vector<SdPackageEntry>& entries,std::string& error);
+bool inspectLocalPackage(const std::string& archive,const GameInstall& install,LocalPackageInfo& info,
+                         std::string& error,const ProgressCallback& progress = {});
+bool installLocalPackage(const LocalPackageInfo& info,const GameInstall& install,std::string& error,
+                         const ProgressCallback& progress = {},
+                         const std::function<bool(std::string&)>& beforeMutation = {});
 #ifdef UNBOUND_DIAGNOSTIC_SD
 // Local-only diagnostic entry point. The digest binds the confirmed ZIP to the
 // file that is installed; it is not publisher authentication or a release tag.

@@ -561,7 +561,7 @@ DiagnosticsReport collectDiagnostics(const DiagnosticsContext& context, const Di
            << "Full language install pending: " << (context.installPreferences.languageInstallPending ? "Yes" : "No") << '\n'
            << "Language folder: " << diagnosticsSafeMessage(install.languageFolder) << '\n'
            << "Unbound version (session): " << (install.modVersion.empty() ? "Not installed / marker unavailable" : diagnosticsSafeMessage(install.modVersion)) << '\n'
-           << "Install routing: Official update code/content only; no AOC payloads\n"
+           << "Install routing: update/ to USB/NAND, sd/ to game-specific SD content; no AOC payloads\n"
            << "Core ZIP download limit: " << config::MaxArchiveBytes << " bytes\n"
            << "Core expanded-package limit: " << config::MaxArchiveExpandedBytes << " bytes\n"
            << "Core individual-file limit: " << config::MaxArchiveEntryBytes << " bytes\n"
@@ -579,13 +579,20 @@ DiagnosticsReport collectDiagnostics(const DiagnosticsContext& context, const Di
         report << "Installed mods: " << install.update.root + "/content/mods" << '\n';
     }
 
-    report << "\nOPTIONAL SD MAP PACKS\nCatalog: " << config::gameReleasesUrl() << '\n';
+    report << "\nOPTIONAL MAP PACKS (USB/NAND)\nCatalog: " << config::gameReleasesUrl() << '\n';
     for(const char* record:{"pending.txt","selection.txt"}){
-        std::string value;const auto path=std::string(config::SdRoot)+"/state/maps/"+record;
+        std::string value;const auto path=std::string(config::gameStateRoot())+"/maps/"+record;
         report << record << ": ";
         if(io.readText&&io.readText(path,value,8192))report << diagnosticsSafeMessage(value) << '\n';
         else report << "No readable record\n";
     }
+    report << "\nLOCAL PACKAGE RECOVERY\n";
+    const auto localRecord=std::string(config::gameStateRoot())+"/local-package-install.txt";
+    report << "Record: " << localRecord << '\n';
+    std::string localPending;
+    if(io.readText&&io.readText(localRecord,localPending,4096))
+        report << (trim(localPending).empty()?"No unfinished local package":diagnosticsSafeMessage(localPending)) << '\n';
+    else report << "No readable record\n";
     report << "\nSTORAGE AND HQ FILES\n";
     space(report, "SD card", "fs:/vol/external01", io);
     space(report, "Internal memory", "storage_mlc01:/", io);

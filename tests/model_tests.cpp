@@ -167,6 +167,8 @@ int main() {
     assert(latestAppRelease(appReleases) == &appReleases[1]);
     assert(latestAppRelease(appReleases)->fileBytes == 10000000);
     assert(latestAppRelease(appReleases)->downloadUrl == "https://example.test/Unbound-HQ.wuhb");
+    const auto version15=parseAppReleases("#HQ|66|1.5|https://example.test/Unbound-HQ.wuhb|"+digest+"|43522520\n");
+    assert(version15.size()==1&&version15[0].revision==66&&version15[0].version=="1.5");
     assert(sameAppRelease(appReleases[1], appReleases[1]));
     auto conflictingAppRelease = appReleases[1];
     conflictingAppRelease.downloadUrl = "https://example.test/reused-revision.wuhb";

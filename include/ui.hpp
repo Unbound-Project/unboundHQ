@@ -9,6 +9,7 @@
 #include "supply_run.hpp"
 #include "supply_run_display.hpp"
 #include "quick_update.hpp"
+#include "package_layout.hpp"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <array>
@@ -21,7 +22,7 @@
 
 namespace unbound {
 
-enum class WorkshopTab { Plugins, CustomMaps };
+enum class WorkshopTab { Plugins, CustomMaps, Mods, CustomPackages };
 
 class Ui {
 public:
@@ -109,10 +110,12 @@ public:
                        const std::string& catalogNotice,
                        const std::vector<bool>& releaseReady = {});
     int pluginCatalogMaximumScroll() const { return pluginCatalogMaximumScroll_; }
-    void workshopCustomMaps(const std::vector<MapPack>& maps = {},
+    void workshopContent(WorkshopTab tab,const std::vector<MapPack>& maps = {},
                             const std::vector<std::string>& installed = {},
                             std::size_t selected = 0,int scrollOffset = 0,
                             const std::string& notice = {},bool installReady = false);
+    void localPackages(const std::string& directory,const std::vector<SdPackageEntry>& entries,
+                       std::size_t selected,int scroll,const std::string& notice,bool resuming=false);
     void pluginDetails(const WorkshopPlugin& plugin, const PluginRelease* release,
                        const PluginInstallStatus& status, bool autoUpdateEnabled,
                        int selectedAction, int scrollOffset, const std::string& notice,

@@ -61,16 +61,14 @@ std::string installedMapVersion(const GameInstall& install,const std::string& ma
     return receipt==version+"\n"+install.update.root+"\n"?version:std::string{};
 }
 
-unsigned selectedMapUpdateCount(Ui& ui,const GameInstall& install){
+unsigned installedMapUpdateCount(Ui& ui,const GameInstall& install){
     if(!mapPackTargetReady(install))return 0;
-    std::string preferences,marker,error;
-    if(!readInstallState(std::string(config::gameStateRoot())+"/maps/selection.txt",preferences,error))return 0;
+    std::string marker,error;
     if(!readInstallState(install.update.root+"/"+config::VersionRelativePath,marker,error))return 0;
     loadMapCatalog(ui);unsigned count=0;
     for(const auto& pack:sessionMapCatalog){
-        if(!mapPackSelected(preferences,pack.id))continue;
         auto version=installedMapVersion(install,marker,pack.id,error);
-        if(mapPackRelease(pack,version))++count;
+        if(!version.empty()&&mapPackRelease(pack,version))++count;
     }
     return count;
 }
@@ -176,7 +174,7 @@ bool installMapJobs(Ui& ui,const GameInstall& install,const std::vector<MapJob>&
                 [&](const std::string&,const std::string& detail,int percent){ui.loading("Verifying "+job.name,detail,percent,true);},&control);
             if(result==PackageVerificationStatus::Valid){archive=path;break;}
             if(result==PackageVerificationStatus::Cancelled){downloadWasCancelled=true;return false;}
-            if(!confirmAction(ui,"SD ZIP does not match","Your ZIP was kept. Download the verified map package instead?","DOWNLOAD")){downloadWasCancelled=true;return false;}
+            if(!automaticLocalSource&&!confirmAction(ui,"SD ZIP does not match","Your ZIP was kept. Download the verified map package instead?","DOWNLOAD")){downloadWasCancelled=true;return false;}
             error.clear();break;
         }
         if(archive==cached&&!getPackage(ui,job.name,r.downloadUrl,r.sha256,archive,error,r.compressedBytes))return false;
